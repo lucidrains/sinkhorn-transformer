@@ -1,6 +1,6 @@
 # sinkhorn-transformer
 
-Sinkhorn Transformers, made even more efficient with reversible networks and chunking (from Reformer). Code coming soon
+Sinkhorn Transformers, made even more efficient with reversible networks and chunking (from Reformer). Have achieved a context length of 163k tokens, combining the concepts from these two papers. Code coming soon
 
 https://arxiv.org/abs/2002.11296
 
