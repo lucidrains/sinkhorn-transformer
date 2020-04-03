@@ -2,6 +2,8 @@
 
 Sinkhorn Transformers, made even more efficient with reversible networks and chunking (from Reformer). Code coming soon
 
+https://arxiv.org/abs/2002.11296
+
 ## Citations
 
 ```bibtex
