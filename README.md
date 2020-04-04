@@ -6,11 +6,13 @@
 
 ---
 
-This is meant to eventually be a reproduction of the work outlined in the paper, <a href="https://arxiv.org/abs/2002.11296">Sparse Sinkhorn Attention</a>.
+This will eventually be a reproduction of the work outlined in <a href="https://arxiv.org/abs/2002.11296">Sparse Sinkhorn Attention</a>.
 
-It includes a parameterized sorting network, together with sinkhorn normalization, to sample a permutation matrix that matches the most relevant buckets of keys to the buckets of queries.
+It includes a parameterized sorting network, using sinkhorn normalization to sample a permutation matrix that matches the most relevant buckets of keys to the buckets of queries.
 
 This work also brings in reversible networks and feed forward chunking (concepts introduced from <a href="https://openreview.net/forum?id=rkgNKkHtvB">Reformer</a>) to bring about further memory savings.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Eej8U4pP5ldZOz3tHwpoBFgmQqLhQLUq) 204k tokens (demonstration purposes)
 
 ## Install
 
@@ -59,6 +61,13 @@ s = SinkhornTransformer(
 x = torch.randn(1, 2048, 1024)
 s(x) # (1, 2048, 1024)
 ```
+
+## Todo
+
+1. Contextual key / values
+2. Full encoder / decoder, with argument routing for reversible network
+3. Find solution for input masking, potentially with topk of sorting matrix rows
+4. Add ability to add local attention heads
 
 ## Citations
 

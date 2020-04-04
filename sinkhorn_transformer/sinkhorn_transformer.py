@@ -283,7 +283,7 @@ class SinkhornTransformer(nn.Module):
                 Chunk(ff_chunks, FeedForward(dim), along_dim=1)
             ]))
         self.layers = ReversibleSequence(layers)
-    def forward(self, x):
+    def forward(self, x, input_mask = None):
         x = torch.cat([x, x], dim = -1)
         x = self.layers(x)
         return torch.stack(x.chunk(2, dim=-1)).sum(dim=0)
@@ -297,7 +297,7 @@ class SinkhornTransformerLM(nn.Module):
         self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, ff_chunks = ff_chunks)
         self.to_logits = nn.Linear(dim, num_tokens)
 
-    def forward(self, x):
+    def forward(self, x, input_mask = None):
         x = self.to_token_emb(x)
         x = self.pos_emb(torch.arange(x.shape[1], device=x.device)) + x
         x = self.sinkhorn_transformer(x)
