@@ -249,16 +249,16 @@ class SinkhornCausalAttention(nn.Module):
         return out
 
 class SinkhornSelfAttention(nn.Module):
-    def __init__(self, dim, heads = 8, buckets = 64, causal = False, sinkhorn_iter = 5, n_sortcut = 0):
+    def __init__(self, dim, heads = 8, buckets = 64, causal = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75):
         super().__init__()
         self.heads = heads
         self.to_qkv = nn.Linear(dim, 3 * dim, bias=False)
         self.to_out = nn.Linear(dim, dim)
 
         if causal:
-            attn = SinkhornCausalAttention(buckets, dim, heads)
+            attn = SinkhornCausalAttention(buckets, dim, heads, temperature = temperature)
         else:
-            attn = SinkhornAttention(buckets, dim, heads, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut)
+            attn = SinkhornAttention(buckets, dim, heads, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature)
 
         self.sinkhorn_attention = attn
 
@@ -274,12 +274,12 @@ class SinkhornSelfAttention(nn.Module):
         return out
 
 class SinkhornTransformer(nn.Module):
-    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, sinkhorn_iter = 5, n_sortcut = 0, ff_chunks = 1):
+    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, ff_chunks = 1):
         super().__init__()
         layers = nn.ModuleList([])
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut),
+                SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature),
                 Chunk(ff_chunks, FeedForward(dim), along_dim=1)
             ]))
         self.layers = ReversibleSequence(layers)
@@ -289,12 +289,12 @@ class SinkhornTransformer(nn.Module):
         return torch.stack(x.chunk(2, dim=-1)).sum(dim=0)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, sinkhorn_iter = 5, n_sortcut = 0, ff_chunks = 1):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, ff_chunks = 1):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, ff_chunks = ff_chunks)
+        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, ff_chunks = ff_chunks)
         self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x):
