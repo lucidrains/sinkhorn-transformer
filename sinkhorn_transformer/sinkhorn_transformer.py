@@ -279,8 +279,8 @@ class SinkhornTransformer(nn.Module):
         layers = nn.ModuleList([])
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature),
-                Chunk(ff_chunks, FeedForward(dim), along_dim=1)
+                WithNorm(nn.LayerNorm, dim, SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature)),
+                Chunk(ff_chunks, WithNorm(nn.LayerNorm, dim, FeedForward(dim)), along_dim=1)
             ]))
         self.layers = ReversibleSequence(layers)
     def forward(self, x, input_mask = None):
