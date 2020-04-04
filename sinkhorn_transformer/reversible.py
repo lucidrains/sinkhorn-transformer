@@ -92,18 +92,6 @@ class ReversibleBlock(nn.Module):
 
         return x, dx
 
-class IrreversibleBlock(nn.Module):
-    def __init__(self, f, g):
-        super().__init__()
-        self.f = f
-        self.g = g
-
-    def forward(self, x, f_args, g_args):
-        x1, x2 = torch.chunk(x, 2, dim=2)
-        y1 = x1 + self.f(x2, **f_args)
-        y2 = x2 + self.g(y1, **g_args)
-        return torch.cat([y1, y2], dim=2)
-
 class _ReversibleFunction(Function):
     @staticmethod
     def forward(ctx, x, blocks, kwargs):
@@ -123,17 +111,13 @@ class _ReversibleFunction(Function):
         return dy, None, None
 
 class ReversibleSequence(nn.Module):
-    def __init__(self, blocks, layer_dropout = 0., reverse_thres = 0):
+    def __init__(self, blocks, layer_dropout = 0.):
         super().__init__()
         self.layer_dropout = layer_dropout
-        self.reverse_thres = reverse_thres
-
         self.blocks = nn.ModuleList([ReversibleBlock(f=f, g=g) for f, g in blocks])
-        self.irrev_blocks = nn.ModuleList([IrreversibleBlock(f=f, g=g) for f, g in blocks])
 
     def forward(self, x, arg_route = (True, True), **kwargs):
-        reverse = x.shape[1] > self.reverse_thres
-        blocks = self.blocks if reverse else self.irrev_blocks
+        blocks = self.blocks
 
         if self.training and self.layer_dropout > 0:
             to_drop = torch.empty(len(self.blocks)).uniform_(0, 1) < self.layer_dropout
@@ -141,11 +125,6 @@ class ReversibleSequence(nn.Module):
             blocks = self.blocks[:1] if len(blocks) == 0 else blocks
 
         f_args, g_args = map(lambda route: kwargs if route else {}, arg_route)
-        block_kwargs = {'f_args': f_args, 'g_args': g_args}
-
-        if not reverse:
-            for block in blocks:
-                x = block(x, **block_kwargs)
-            return x
+        block_kwargs = {'f_args': f_args, 'g_args': g_args}        
 
         return _ReversibleFunction.apply(x, blocks, block_kwargs)

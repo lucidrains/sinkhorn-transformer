@@ -4,6 +4,17 @@ import torch.nn.functional as F
 from functools import partial
 from sinkhorn_transformer.reversible import ReversibleSequence
 
+# helper functions
+
+def identity(x, *args, **kwargs): return x
+
+def each(fn, arr):
+    for el in arr:
+        fn(el)
+
+def log(t, eps = 1e-6):
+    return torch.log(t + eps)
+
 def max_neg_value(tensor):
     return -torch.finfo(tensor.dtype).max
 
@@ -38,14 +49,9 @@ def unbucket(v):
 def logsumexp(tensor, dim, keepdim=True):
     return torch.log(torch.exp(tensor).sum(dim, keepdim=keepdim))
 
-def sample_gumbel(shape, device, eps=1e-4):
+def sample_gumbel(shape, device, eps=1e-6):
     u = torch.empty(shape, device = device).uniform_(0, 1)
-    return -torch.log(-torch.log(u + eps) + eps)
-
-def identity(x, *args, **kwargs): return x
-
-def log(t, eps = 1e-6):
-    return torch.log(t + eps)
+    return -log(-log(u, eps), eps)
 
 def sinkhorn_sorting_operator(r, n_iters = 8):
     n = r.shape[1]
@@ -63,9 +69,7 @@ def cumavg(t, dim):
     expand_slice[dim] = slice(None, None)
     return t.cumsum(dim=dim) / r[tuple(expand_slice)]
 
-def each(fn, arr):
-    for el in arr:
-        fn(el)
+# helper classes
 
 class Chunk(nn.Module):
     def __init__(self, chunks, fn, along_dim = -1):
@@ -90,14 +94,7 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-class Residual(nn.Module):
-    def __init__(self, fn):
-        super().__init__()
-        self.fn = fn
-    def forward(self, x):
-        return x + self.fn(x)
-
-class WithNorm(nn.Module):
+class PreNorm(nn.Module):
     def __init__(self, norm_class, dim, fn):
         super().__init__()
         self.norm = norm_class(dim)
@@ -273,28 +270,51 @@ class SinkhornSelfAttention(nn.Module):
         out = self.to_out(out)
         return out
 
-class SinkhornTransformer(nn.Module):
-    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, ff_chunks = 1):
+class Reversible(nn.Module):
+    def __init__(self, layers):
         super().__init__()
-        layers = nn.ModuleList([])
-        for _ in range(depth):
-            layers.append(nn.ModuleList([
-                WithNorm(nn.LayerNorm, dim, SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature)),
-                Chunk(ff_chunks, WithNorm(nn.LayerNorm, dim, FeedForward(dim)), along_dim=1)
-            ]))
         self.layers = ReversibleSequence(layers)
-    def forward(self, x, input_mask = None):
-        x = torch.cat([x, x], dim = -1)
-        x = self.layers(x)
+
+    def forward(self, x, **kwargs):
+        x = torch.cat([x, x], dim=-1)
+        x = self.layers(x, **kwargs)
         return torch.stack(x.chunk(2, dim=-1)).sum(dim=0)
 
+class Sequential(nn.Module):
+    def __init__(self, layers):
+        super().__init__()
+        self.layers = layers
+
+    def forward(self, x, **kwargs):
+        for f, g in self.layers:
+            x = x + f(x, **kwargs)
+            x = x + g(x, **kwargs)
+        return x
+
+class SinkhornTransformer(nn.Module):
+    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1):
+        super().__init__()
+        layers = nn.ModuleList([])
+
+        for _ in range(depth):
+            layers.append(nn.ModuleList([
+                PreNorm(nn.LayerNorm, dim, SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature)),
+                Chunk(ff_chunks, PreNorm(nn.LayerNorm, dim, FeedForward(dim)), along_dim=1)
+            ]))
+
+        execute_type = Reversible if reversible else Sequential
+        self.layers = execute_type(layers)
+
+    def forward(self, x, input_mask = None):
+        return self.layers(x)
+
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, ff_chunks = 1):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, ff_chunks = ff_chunks)
+        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks)
         self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x, input_mask = None):
