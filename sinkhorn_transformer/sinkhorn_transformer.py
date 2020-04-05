@@ -138,7 +138,6 @@ class SinkhornAttention(nn.Module):
         R  = (R + gumbel_noise) / temperature
 
         R = sinkhorn_sorting_operator(R, self.sinkhorn_iter)
-        R = torch.tril(R, diagonal=-1)
         R = R.type(q.type())
 
         k_bucketed = bucket_fn(k)
