@@ -46,9 +46,6 @@ def unbucket(v):
     b, *_, e = v.shape
     return v.reshape(b, -1, e)
 
-def logsumexp(tensor, dim, keepdim=True):
-    return torch.log(torch.exp(tensor).sum(dim, keepdim=keepdim))
-
 def sample_gumbel(shape, device, eps=1e-6):
     u = torch.empty(shape, device = device).uniform_(0, 1)
     return -log(-log(u, eps), eps)
@@ -56,8 +53,8 @@ def sample_gumbel(shape, device, eps=1e-6):
 def sinkhorn_sorting_operator(r, n_iters = 8):
     n = r.shape[1]
     for _ in range(n_iters):
-        r = r - logsumexp(r, dim=2)
-        r = r - logsumexp(r, dim=1)
+        r = r - torch.logsumexp(r, dim=2, keepdim=True)
+        r = r - torch.logsumexp(r, dim=1, keepdim=True)
     return torch.exp(r)
 
 def reorder_buckets(t, r):
