@@ -101,12 +101,13 @@ class PreNorm(nn.Module):
         return self.fn(x, **kwargs)
 
 class SinkhornAttention(nn.Module):
-    def __init__(self, buckets, dim, heads, temperature = 0.75, sinkhorn_iter = 7, n_sortcut = 0):
+    def __init__(self, buckets, dim, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0):
         super().__init__()
         self.dim = dim
         self.buckets = buckets
         self.heads = heads
         self.temperature = temperature
+        self.non_permutative = non_permutative
         self.sinkhorn_iter = sinkhorn_iter
         self.n_sortcut = n_sortcut
 
@@ -137,7 +138,7 @@ class SinkhornAttention(nn.Module):
         gumbel_noise = sample_gumbel(R.shape, device)
         R  = (R + gumbel_noise) / temperature
 
-        R = sinkhorn_sorting_operator(R, self.sinkhorn_iter)
+        R = sinkhorn_sorting_operator(R, self.sinkhorn_iter) if not self.non_permutative else R.softmax(dim=-1)
         R = R.type(q.type())
 
         k_bucketed = bucket_fn(k)
@@ -242,7 +243,7 @@ class SinkhornCausalAttention(nn.Module):
         return out
 
 class SinkhornSelfAttention(nn.Module):
-    def __init__(self, dim, heads = 8, buckets = 64, causal = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75):
+    def __init__(self, dim, heads = 8, buckets = 64, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75):
         super().__init__()
         self.heads = heads
         self.to_qkv = nn.Linear(dim, 3 * dim, bias=False)
@@ -251,7 +252,7 @@ class SinkhornSelfAttention(nn.Module):
         if causal:
             attn = SinkhornCausalAttention(buckets, dim, heads, temperature = temperature)
         else:
-            attn = SinkhornAttention(buckets, dim, heads, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature)
+            attn = SinkhornAttention(buckets, dim, heads, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature)
 
         self.sinkhorn_attention = attn
 
@@ -288,13 +289,13 @@ class Sequential(nn.Module):
         return x
 
 class SinkhornTransformer(nn.Module):
-    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1):
+    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1):
         super().__init__()
         layers = nn.ModuleList([])
 
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                PreNorm(nn.LayerNorm, dim, SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature)),
+                PreNorm(nn.LayerNorm, dim, SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature)),
                 Chunk(ff_chunks, PreNorm(nn.LayerNorm, dim, FeedForward(dim)), along_dim=1)
             ]))
 
@@ -305,12 +306,12 @@ class SinkhornTransformer(nn.Module):
         return self.layers(x)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks)
+        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks)
         self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x, input_mask = None):

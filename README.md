@@ -35,12 +35,13 @@ s = SinkhornTransformerLM(
     depth = 12,
     buckets = 64,
     max_seq_len = 8192,
-    causal = False,     # auto-regressive or not
-    n_sortcut = 2,      # use sortcut to reduce complexity to linear time
-    temperature = 0.75, # gumbel temperature - default is set at reported best in paper
-    sinkhorn_iter = 7,  # number of sinkhorn iterations - default is set at reported best in paper
-    ff_chunks = 10,     # feedforward chunking, from Reformer paper
-    reversible = True   # make network reversible, from Reformer paper
+    causal = False,          # auto-regressive or not
+    sinkhorn_iter = 7,       # number of sinkhorn iterations - default is set at reported best in paper
+    n_sortcut = 2,           # use sortcut to reduce complexity to linear time
+    temperature = 0.75,      # gumbel temperature - default is set at reported best in paper
+    non_permutative = False, # allow buckets of keys to be sorted to queries more than once
+    ff_chunks = 10,          # feedforward chunking, from Reformer paper
+    reversible = True,       # make network reversible, from Reformer paper
 )
 
 x = torch.randint(0, 20000, (1, 2048))
