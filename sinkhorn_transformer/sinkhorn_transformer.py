@@ -139,7 +139,7 @@ class SinkhornAttention(nn.Module):
         R  = (R + gumbel_noise) / temperature
 
         R = sinkhorn_sorting_operator(R, self.sinkhorn_iter) if not self.non_permutative else R.softmax(dim=-1)
-        R = R.type(q.type())
+        R = R.type_as(q).to(q)
 
         k_bucketed = bucket_fn(k)
         v_bucketed = bucket_fn(v)
@@ -209,7 +209,7 @@ class SinkhornCausalAttention(nn.Module):
 
         R = R.softmax(dim=-1)
         R = torch.tril(R, diagonal=-1)
-        R = R.type(q.type())
+        R = R.type_as(q).to(q)
 
         k_bucketed = bucket_fn(k)
         v_bucketed = bucket_fn(v)

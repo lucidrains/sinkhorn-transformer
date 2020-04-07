@@ -42,9 +42,10 @@ model = SinkhornTransformerLM(
     max_seq_len = SEQ_LEN,
     num_tokens = 256,
     heads = 8,
-    buckets = 128,
+    buckets = 64,
     ff_chunks = 10,
-    causal = True
+    causal = True,
+    reversible = True
 )
 
 model = AutoregressiveWrapper(model)
