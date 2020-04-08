@@ -118,7 +118,7 @@ class SinkhornAttention(nn.Module):
         self.n_sortcut = n_sortcut
 
         d_head = dim // heads
-        self.sort_w = nn.Parameter(torch.randn(1, heads, d_head, buckets))
+        self.sort_w = nn.Parameter(torch.randn(1, heads, d_head * 2, buckets))
 
     def forward(self, q, k, v, context=None):
         b, h, t, d_h, d, heads, temperature, buckets, device = *q.shape, self.dim, self.heads, self.temperature, self.buckets, q.device
@@ -133,10 +133,9 @@ class SinkhornAttention(nn.Module):
 
         # calculate R
 
-        k_r = bucket_fn(k)
-        b_k_r = k_r.sum(dim=2)
+        b_k_r = torch.cat((b_q.sum(dim=2), b_k.sum(dim=2)), dim=-1)
 
-        e_W_r = self.sort_w.expand(b, -1, -1, -1).reshape(b * heads, d_h, buckets)
+        e_W_r = self.sort_w.expand(b, -1, -1, -1).reshape(b * heads, d_h * 2, buckets)
         R = F.relu(b_k_r @ e_W_r)
 
         # gumbel sinkhorn
@@ -144,11 +143,15 @@ class SinkhornAttention(nn.Module):
         R = gumbel_sinkhorn(R, self.sinkhorn_iter, temperature) if not self.non_permutative else R.softmax(dim=-1)
         R = R.type_as(q).to(q)
 
+        # concatenate reordered buckets
+
         k_bucketed = bucket_fn(k)
         v_bucketed = bucket_fn(v)
 
         k_reordered_buckets = reorder_buckets(k_bucketed, R)
         v_reordered_buckets = reorder_buckets(v_bucketed, R)
+
+        # choose the top n ranked buckets for all query buckets
 
         if self.n_sortcut > 0:
             k_reordered_buckets = k_reordered_buckets[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut, d_h).expand(-1, buckets, -1, -1)
@@ -158,6 +161,8 @@ class SinkhornAttention(nn.Module):
         b_v = torch.cat((v_reordered_buckets, b_v), dim=2)
 
         dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d ** -0.5)
+
+        # attention
         dots = dots.softmax(dim=-1)
 
         out = torch.einsum('buij,buje->buie', dots, b_v)
@@ -205,11 +210,13 @@ class SinkhornCausalAttention(nn.Module):
         e_W_r = self.sort_w.expand(b, -1, -1, -1).reshape(b * heads, d_h * 2, buckets)
         R = F.relu(b_k_r @ e_W_r)
 
-        # gumbel sinkhorn
+        # softmax and mask to prevent future buckets going to past
 
         R = R.softmax(dim=-1)
         R = torch.tril(R, diagonal=-1)
         R = R.type_as(q).to(q)
+
+        # concat reordered buckets
 
         k_bucketed = bucket_fn(k)
         v_bucketed = bucket_fn(v)
@@ -233,6 +240,7 @@ class SinkhornCausalAttention(nn.Module):
         dots.masked_fill_(~mask, mask_value)
         del mask
 
+        # attention
         dots = dots.softmax(dim=-1)
 
         out = torch.einsum('buij,buje->buie', dots, b_v)
