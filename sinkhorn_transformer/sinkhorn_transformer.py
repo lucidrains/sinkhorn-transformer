@@ -72,6 +72,9 @@ def cumavg(t, dim):
     expand_slice[dim] = slice(None, None)
     return t.cumsum(dim=dim) / r[tuple(expand_slice)]
 
+def divisible_by(num, divisor):
+    return (num / divisor).is_integer()
+
 # helper classes
 
 class Chunk(nn.Module):
@@ -122,6 +125,7 @@ class SinkhornAttention(nn.Module):
 
     def forward(self, q, k, v, context=None):
         b, h, t, d_h, d, heads, temperature, buckets, device = *q.shape, self.dim, self.heads, self.temperature, self.buckets, q.device
+
         bsz = t // buckets
 
         q = q.reshape(b * h, t, d_h)
@@ -184,6 +188,7 @@ class SinkhornCausalAttention(nn.Module):
 
     def forward(self, q, k, v):
         b, h, t, d_h, d, heads, temperature, buckets, device = *q.shape, self.dim, self.heads, self.temperature, self.buckets, q.device
+
         bsz = t // buckets
         hh = h // 2
 
@@ -253,7 +258,11 @@ class SinkhornCausalAttention(nn.Module):
 class SinkhornSelfAttention(nn.Module):
     def __init__(self, dim, heads = 8, buckets = 64, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75):
         super().__init__()
+        assert divisible_by(dim, heads), f'dimension {dim} must be divisible by the number of heads {heads}'
+
         self.heads = heads
+        self.buckets = buckets
+
         self.to_qkv = nn.Linear(dim, 3 * dim, bias=False)
         self.to_out = nn.Linear(dim, dim)
 
@@ -266,6 +275,8 @@ class SinkhornSelfAttention(nn.Module):
 
     def forward(self, x):
         b, t, d, h = *x.shape, self.heads
+        assert divisible_by(t, self.buckets), f'sequence {t} needs to be divisible by bucket size {self.buckets}'
+
         qkv = self.to_qkv(x).chunk(3, dim=2)
 
         merge_heads_fn = partial(merge_heads, h)
@@ -314,16 +325,19 @@ class SinkhornTransformer(nn.Module):
         return self.layers(x)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, return_embeddings = False):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
         self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks)
-        self.to_logits = nn.Linear(dim, num_tokens)
+        self.to_logits = identity if return_embeddings else nn.Linear(dim, num_tokens)
 
     def forward(self, x, input_mask = None):
+        _, t, device = *x.shape, x.device
+        assert t <= self.max_seq_len, f'sequence length {t} is greater than maximum sequence length {self.max_seq_len}'
+
         x = self.to_token_emb(x)
-        x = self.pos_emb(torch.arange(x.shape[1], device=x.device)) + x
+        x = self.pos_emb(torch.arange(t, device=device)) + x
         x = self.sinkhorn_transformer(x)
         return self.to_logits(x)
