@@ -50,12 +50,18 @@ def sample_gumbel(shape, device, eps=1e-6):
     u = torch.empty(shape, device = device).uniform_(0, 1)
     return -log(-log(u, eps), eps)
 
-def sinkhorn_sorting_operator(r, n_iters = 8):
+def sinkhorn_sorting_operator(r, n_iters=8):
     n = r.shape[1]
     for _ in range(n_iters):
         r = r - torch.logsumexp(r, dim=2, keepdim=True)
         r = r - torch.logsumexp(r, dim=1, keepdim=True)
     return torch.exp(r)
+
+def gumbel_sinkhorn(r, n_iters=8, temperature=0.7):
+    r = log(r)
+    gumbel = sample_gumbel(r.shape, r.device)
+    r = (r + gumbel) / temperature
+    return sinkhorn_sorting_operator(r, n_iters)
 
 def reorder_buckets(t, r):
     return torch.einsum('buv,bvtd->butd', r, t)
@@ -131,14 +137,11 @@ class SinkhornAttention(nn.Module):
         b_k_r = k_r.sum(dim=2)
 
         e_W_r = self.sort_w.expand(b, -1, -1, -1).reshape(b * heads, d_h, buckets)
-        R = log(F.relu(b_k_r @ e_W_r))
+        R = F.relu(b_k_r @ e_W_r)
 
         # gumbel sinkhorn
 
-        gumbel_noise = sample_gumbel(R.shape, device)
-        R  = (R + gumbel_noise) / temperature
-
-        R = sinkhorn_sorting_operator(R, self.sinkhorn_iter) if not self.non_permutative else R.softmax(dim=-1)
+        R = gumbel_sinkhorn(R, self.sinkhorn_iter, temperature) if not self.non_permutative else R.softmax(dim=-1)
         R = R.type_as(q).to(q)
 
         k_bucketed = bucket_fn(k)
@@ -200,12 +203,9 @@ class SinkhornCausalAttention(nn.Module):
         b_k_r = k_r[:, :, 0]
 
         e_W_r = self.sort_w.expand(b, -1, -1, -1).reshape(b * heads, d_h * 2, buckets)
-        R = log(F.relu(b_k_r @ e_W_r))
+        R = F.relu(b_k_r @ e_W_r)
 
         # gumbel sinkhorn
-
-        gumbel_noise = sample_gumbel(R.shape, device)
-        R  = (R + gumbel_noise) / temperature
 
         R = R.softmax(dim=-1)
         R = torch.tril(R, diagonal=-1)
