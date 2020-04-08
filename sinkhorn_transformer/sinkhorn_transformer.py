@@ -109,6 +109,26 @@ class PreNorm(nn.Module):
         x = self.norm(x)
         return self.fn(x, **kwargs)
 
+class SortNet(nn.Module):
+    def __init__(self, heads, buckets, dim):
+        super().__init__()
+        self.dim = dim
+        self.heads = heads
+        self.buckets = buckets
+        self.linear = nn.Parameter(torch.randn(1, heads, dim, buckets))
+        self.act = nn.LeakyReLU()
+
+    def forward(self, q, k):
+        bh, *_, buckets = *q.shape, self.buckets
+        b = bh // self.heads
+
+        b_q, b_k = bucket(buckets, q), bucket(buckets, k)
+        x = torch.cat((b_q.sum(dim=2), b_k.sum(dim=2)), dim=-1)
+
+        W = self.linear.expand(b, -1, -1, -1).reshape(b * self.heads, self.dim, buckets)
+        R = self.act(x @ W)
+        return R
+
 class SinkhornAttention(nn.Module):
     def __init__(self, buckets, dim, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0):
         super().__init__()
@@ -119,9 +139,7 @@ class SinkhornAttention(nn.Module):
         self.non_permutative = non_permutative
         self.sinkhorn_iter = sinkhorn_iter
         self.n_sortcut = n_sortcut
-
-        d_head = dim // heads
-        self.sort_w = nn.Parameter(torch.randn(1, heads, d_head * 2, buckets))
+        self.sort_net = SortNet(heads, buckets, dim // heads * 2)
 
     def forward(self, q, k, v, context=None):
         b, h, t, d_h, d, heads, temperature, buckets, device = *q.shape, self.dim, self.heads, self.temperature, self.buckets, q.device
@@ -132,15 +150,14 @@ class SinkhornAttention(nn.Module):
         k = k.reshape(b * h, t, d_h)
         v = v.reshape(b * h, t, d_h)
 
+        # bucket query, key, values
+
         bucket_fn = partial(bucket, buckets)
         b_q, b_k, b_v = map(bucket_fn, (q, k, v))
 
-        # calculate R
+        # calculate reordering matrix R with simple sort net
 
-        b_k_r = torch.cat((b_q.sum(dim=2), b_k.sum(dim=2)), dim=-1)
-
-        e_W_r = self.sort_w.expand(b, -1, -1, -1).reshape(b * heads, d_h * 2, buckets)
-        R = F.relu(b_k_r @ e_W_r)
+        R = self.sort_net(q, k)
 
         # gumbel sinkhorn
 
@@ -175,6 +192,28 @@ class SinkhornAttention(nn.Module):
         out = out.reshape(b, h, t, d_h)
         return out
 
+class CausalSortNet(nn.Module):
+    def __init__(self, heads, buckets, dim):
+        super().__init__()
+        self.dim = dim
+        self.heads = heads
+        self.buckets = buckets
+        self.linear = nn.Parameter(torch.randn(1, heads, dim, buckets))
+        self.act = nn.LeakyReLU()
+
+    def forward(self, q, k):
+        bh, *_, buckets = *q.shape, self.buckets
+        b = bh // self.heads
+
+        k_r = torch.cat((cumavg(k, dim=1), k), dim=-1)
+        k_r = bucket(buckets, k_r)
+
+        # for causal sort net, take the first token of each bucket to prevent leaking of future to past
+        x = k_r[:, :, 0]
+
+        W = self.linear.expand(b, -1, -1, -1).reshape(bh, self.dim, buckets)
+        return self.act(x @ W)
+
 class SinkhornCausalAttention(nn.Module):
     def __init__(self, buckets, dim, heads, temperature = 0.75, sinkhorn_iter = 7, n_sortcut = 0):
         super().__init__()
@@ -183,8 +222,7 @@ class SinkhornCausalAttention(nn.Module):
         self.heads = heads
         self.temperature = temperature
         self.sinkhorn_iter = sinkhorn_iter
-        d_head = dim // heads
-        self.sort_w = nn.Parameter(torch.randn(1, heads, d_head * 2, buckets))
+        self.sort_net = CausalSortNet(heads, buckets, dim // heads * 2)
 
     def forward(self, q, k, v):
         b, h, t, d_h, d, heads, temperature, buckets, device = *q.shape, self.dim, self.heads, self.temperature, self.buckets, q.device
@@ -207,13 +245,7 @@ class SinkhornCausalAttention(nn.Module):
 
         # calculate R
 
-        k_r = torch.cat((cumavg(k, dim=1), k), dim=-1)
-        k_r = bucket_fn(k_r)
-
-        b_k_r = k_r[:, :, 0]
-
-        e_W_r = self.sort_w.expand(b, -1, -1, -1).reshape(b * heads, d_h * 2, buckets)
-        R = F.relu(b_k_r @ e_W_r)
+        R = self.sort_net(q, k)
 
         # softmax and mask to prevent future buckets going to past
 
