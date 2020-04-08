@@ -75,6 +75,10 @@ def cumavg(t, dim):
 def divisible_by(num, divisor):
     return (num / divisor).is_integer()
 
+def zero_all_but_top(x, dim, k=1):
+    values, indices = torch.topk(x, k, dim=dim)
+    return torch.zeros_like(x).scatter_(dim, indices, values)
+
 # helper classes
 
 class Chunk(nn.Module):
@@ -164,13 +168,13 @@ class SinkhornAttention(nn.Module):
         R = gumbel_sinkhorn(R, self.sinkhorn_iter, temperature) if not self.non_permutative else R.softmax(dim=-1)
         R = R.type_as(q).to(q)
 
+        # only allow one bucket to be reordered to, needed for input masking to work
+        R = zero_all_but_top(R, dim=2, k=1)
+
         # concatenate reordered buckets
 
-        k_bucketed = bucket_fn(k)
-        v_bucketed = bucket_fn(v)
-
-        k_reordered_buckets = reorder_buckets(k_bucketed, R)
-        v_reordered_buckets = reorder_buckets(v_bucketed, R)
+        k_reordered_buckets = reorder_buckets(b_k, R)
+        v_reordered_buckets = reorder_buckets(b_v, R)
 
         # choose the top n ranked buckets for all query buckets
 
@@ -253,13 +257,13 @@ class SinkhornCausalAttention(nn.Module):
         R = torch.tril(R, diagonal=-1)
         R = R.type_as(q).to(q)
 
+        # only allow one bucket to be reordered to, needed for input masking to work
+        R = zero_all_but_top(R, dim=2, k=1)
+
         # concat reordered buckets
 
-        k_bucketed = bucket_fn(k)
-        v_bucketed = bucket_fn(v)
-
-        k_reordered_buckets = reorder_buckets(k_bucketed, R)
-        v_reordered_buckets = reorder_buckets(v_bucketed, R)
+        k_reordered_buckets = reorder_buckets(b_k, R)
+        v_reordered_buckets = reorder_buckets(b_v, R)
 
         b_k = torch.cat((k_reordered_buckets, b_k), dim=2)
         b_v = torch.cat((v_reordered_buckets, b_v), dim=2)
