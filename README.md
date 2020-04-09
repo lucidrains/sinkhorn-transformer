@@ -113,6 +113,6 @@ s(x) # (1, 2048, 1024)
     title   = {GLU Variants Improve Transformer},
     author  = {Noam Shazeer},
     year    = {2020},
-    url     = {https://arxiv.org/abs/2002.05202}    
+    url     = {https://arxiv.org/abs/2002.05202}
 }
 ```

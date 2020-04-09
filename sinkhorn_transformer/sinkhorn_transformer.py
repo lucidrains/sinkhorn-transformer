@@ -124,7 +124,7 @@ class FeedForward(nn.Module):
             x = self.act(x)
         else:
             x, v = self.w1(x).chunk(2, dim=-1)
-            x = self.act(x) * F.sigmoid(v)
+            x = self.act(x) * v
 
         x = self.dropout(x)
         x = self.w2(x)
