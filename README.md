@@ -116,3 +116,5 @@ s(x) # (1, 2048, 1024)
     url     = {https://arxiv.org/abs/2002.05202}
 }
 ```
+
+<img src="./divine.png"></img>
