@@ -120,7 +120,7 @@ class SortNet(nn.Module):
         self.heads = heads
         self.buckets = buckets
         self.linear = nn.Parameter(torch.randn(1, heads, dim, buckets))
-        self.act = nn.LeakyReLU()
+        self.act = nn.ReLU()
 
     def forward(self, q, k):
         bh, *_, buckets = *q.shape, self.buckets
@@ -253,8 +253,16 @@ class SinkhornCausalAttention(nn.Module):
 
         # softmax and mask to prevent future buckets going to past
 
+        mask_value = max_neg_value(q)
+        mask = torch.zeros((b * h, buckets, buckets), device=device).bool()
+        i, j = torch.triu_indices(buckets, buckets)
+        mask[:, 0, :] = True
+        mask[:, i, j] = True
+        R.masked_fill_(mask, mask_value)
         R = R.softmax(dim=-1)
-        R = torch.tril(R, diagonal=-1)
+        R = R.tril(diagonal=-1) # extra insurance
+        del mask
+
         R = R.type_as(q).to(q)
 
         # only allow one bucket to be reordered to, needed for input masking to work
@@ -277,7 +285,6 @@ class SinkhornCausalAttention(nn.Module):
         mask[:, hh:, -1, 0, 0:bsz+1] = True
         mask = mask.reshape(b * h, buckets, bsz, bsz * 2)
 
-        mask_value = max_neg_value(dots)
         dots.masked_fill_(~mask, mask_value)
         del mask
 
