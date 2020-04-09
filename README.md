@@ -35,13 +35,18 @@ s = SinkhornTransformerLM(
     depth = 12,
     buckets = 64,
     max_seq_len = 8192,
-    causal = False,          # auto-regressive or not
-    sinkhorn_iter = 7,       # number of sinkhorn iterations - default is set at reported best in paper
-    n_sortcut = 2,           # use sortcut to reduce complexity to linear time
-    temperature = 0.75,      # gumbel temperature - default is set at reported best in paper
-    non_permutative = False, # allow buckets of keys to be sorted to queries more than once
-    ff_chunks = 10,          # feedforward chunking, from Reformer paper
-    reversible = True,       # make network reversible, from Reformer paper
+    causal = False,           # auto-regressive or not
+    sinkhorn_iter = 7,        # number of sinkhorn iterations - default is set at reported best in paper
+    n_sortcut = 2,            # use sortcut to reduce complexity to linear time
+    temperature = 0.75,       # gumbel temperature - default is set at reported best in paper
+    non_permutative = False,  # allow buckets of keys to be sorted to queries more than once
+    ff_chunks = 10,           # feedforward chunking, from Reformer paper
+    reversible = True,        # make network reversible, from Reformer paper
+    ff_dropout = 0.1,         # feedforward dropout
+    attn_dropout = 0.1,       # post attention dropout
+    attn_layer_dropout = 0.1, # post attention layer dropout
+    weight_tie = True,        # tie layer parameters, from Albert paper
+    emb_dim = 128,            # embedding factorization, from Albert paper
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -76,10 +81,10 @@ s(x) # (1, 2048, 1024)
 
 ```bibtex
 @misc{tay2020sparse,
-    title   ={Sparse Sinkhorn Attention},
-    author  ={Yi Tay and Dara Bahri and Liu Yang and Donald Metzler and Da-Cheng Juan},
-    year    ={2020},
-    url.    ={https://arxiv.org/abs/2002.11296}
+    title   = {Sparse Sinkhorn Attention},
+    author  = {Yi Tay and Dara Bahri and Liu Yang and Donald Metzler and Da-Cheng Juan},
+    year    = {2020},
+    url.    = {https://arxiv.org/abs/2002.11296}
 }
 ```
 
@@ -90,5 +95,14 @@ s(x) # (1, 2048, 1024)
     booktitle   = {International Conference on Learning Representations},
     year        = {2020},
     url         = {https://openreview.net/forum?id=rkgNKkHtvB}
+}
+```
+
+```bibtex
+@misc{lan2019albert,
+    title       = {ALBERT: A Lite BERT for Self-supervised Learning of Language Representations},
+    author      = {Zhenzhong Lan and Mingda Chen and Sebastian Goodman and Kevin Gimpel and Piyush Sharma and Radu Soricut},
+    year        = {2019},
+    url         = {https://arxiv.org/abs/1909.11942}
 }
 ```
