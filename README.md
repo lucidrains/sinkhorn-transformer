@@ -71,13 +71,6 @@ x = torch.randn(1, 2048, 1024)
 s(x) # (1, 2048, 1024)
 ```
 
-## Todo
-
-1. ~~Contextual key / values~~
-2. Full encoder / decoder, with argument routing for reversible network
-3. Find solution for input masking, potentially with topk of sorting matrix rows
-4. Add ability to add local attention heads
-
 ## Citations
 
 ```bibtex
