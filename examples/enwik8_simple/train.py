@@ -19,7 +19,7 @@ LEARNING_RATE = 1e-4
 VALIDATE_EVERY  = 100
 GENERATE_EVERY  = 500
 GENERATE_LENGTH = 512
-SEQ_LEN = 8192
+SEQ_LEN = 4096
 
 # helpers
 
@@ -37,15 +37,18 @@ def decode_tokens(tokens):
 # instantiate model
 
 model = SinkhornTransformerLM(
+    emb_dim = 128,
     dim = 512,
-    depth = 6,
+    depth = 8,
     max_seq_len = SEQ_LEN,
     num_tokens = 256,
     heads = 8,
-    buckets = 64,
+    buckets = 32,
     ff_chunks = 10,
     causal = True,
-    reversible = True
+    reversible = True,
+    weight_tie = True,
+    attn_dropout = 0.1
 )
 
 model = AutoregressiveWrapper(model)
