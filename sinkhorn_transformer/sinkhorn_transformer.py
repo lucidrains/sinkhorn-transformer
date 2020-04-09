@@ -10,6 +10,9 @@ def identity(x, *args, **kwargs): return x
 
 def default(x, d): return d if x is None else x
 
+def divisible_by(num, divisor):
+    return (num / divisor).is_integer()
+
 def cache_fn(f):
     cache = None
     @wraps(f)
@@ -20,12 +23,6 @@ def cache_fn(f):
         cache = f(*args, **kwargs)
         return cache
     return cached_fn
-
-def log(t, eps = 1e-6):
-    return torch.log(t + eps)
-
-def max_neg_value(tensor):
-    return -torch.finfo(tensor.dtype).max
 
 def rotate_left(t, n, dim=0):
     pre_slices = (slice(None),) * dim
@@ -75,14 +72,22 @@ def gumbel_sinkhorn(r, n_iters=8, temperature=0.7):
 def reorder_buckets(t, r):
     return torch.einsum('buv,bvtd->butd', r, t)
 
+def log(t, eps = 1e-6):
+    return torch.log(t + eps)
+
+def max_neg_value(tensor):
+    return -torch.finfo(tensor.dtype).max
+
 def cumavg(t, dim):
     r = torch.arange(1, t.shape[dim] + 1, device=t.device)
     expand_slice = [None] * len(t.shape)
     expand_slice[dim] = slice(None, None)
     return t.cumsum(dim=dim) / r[tuple(expand_slice)]
 
-def divisible_by(num, divisor):
-    return (num / divisor).is_integer()
+def expand_dim(t, dim, k):
+    expand_shape = [-1] * len(t.shape)
+    expand_shape[dim] = k
+    return t.expand(*expand_shape)
 
 def zero_all_but_top(x, dim, k=1):
     values, indices = torch.topk(x, k, dim=dim)
@@ -169,7 +174,7 @@ class SortNet(nn.Module):
         b_q, b_k = bucket(buckets, q), bucket(buckets, k)
         x = torch.cat((b_q.sum(dim=2), b_k.sum(dim=2)), dim=-1)
 
-        W = self.linear.expand(b, -1, -1, -1).reshape(b * self.heads, self.dim, buckets)
+        W = expand_dim(self.linear, 0, b).reshape(b * self.heads, self.dim, buckets)
         R = self.act(x @ W)
         return R
 
@@ -214,17 +219,19 @@ class SinkhornAttention(nn.Module):
 
         # concatenate reordered buckets
 
-        k_reordered_buckets = reorder_buckets(b_k, R)
-        v_reordered_buckets = reorder_buckets(b_v, R)
+        b_k_r = reorder_buckets(b_k, R)
+        b_v_r = reorder_buckets(b_v, R)
 
         # choose the top n ranked buckets for all query buckets
 
         if self.n_sortcut > 0:
-            k_reordered_buckets = k_reordered_buckets[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut, d_h).expand(-1, buckets, -1, -1)
-            v_reordered_buckets = v_reordered_buckets[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut, d_h).expand(-1, buckets, -1, -1)
+            b_k_r = b_k_r[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut, d_h)
+            b_v_r = b_v_r[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut, d_h)
+            b_k_r = expand_dim(b_k_r, 1, buckets)
+            b_v_r = expand_dim(b_v_r, 1, buckets)
 
-        b_k = torch.cat((k_reordered_buckets, b_k), dim=2)
-        b_v = torch.cat((v_reordered_buckets, b_v), dim=2)
+        b_k = torch.cat((b_k_r, b_k), dim=2)
+        b_v = torch.cat((b_v_r, b_v), dim=2)
 
         dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d ** -0.5)
 
@@ -257,7 +264,7 @@ class CausalSortNet(nn.Module):
         # for causal sort net, take the first token of each bucket to prevent leaking of future to past
         x = k_r[:, :, 0]
 
-        W = self.linear.expand(b, -1, -1, -1).reshape(bh, self.dim, buckets)
+        W = expand_dim(self.linear, 0, b).reshape(bh, self.dim, buckets)
         return self.act(x @ W)
 
 class SinkhornCausalAttention(nn.Module):
@@ -313,11 +320,11 @@ class SinkhornCausalAttention(nn.Module):
 
         # concat reordered buckets
 
-        k_reordered_buckets = reorder_buckets(b_k, R)
-        v_reordered_buckets = reorder_buckets(b_v, R)
+        b_k_r = reorder_buckets(b_k, R)
+        b_v_r = reorder_buckets(b_v, R)
 
-        b_k = torch.cat((k_reordered_buckets, b_k), dim=2)
-        b_v = torch.cat((v_reordered_buckets, b_v), dim=2)
+        b_k = torch.cat((b_k_r, b_k), dim=2)
+        b_v = torch.cat((b_v_r, b_v), dim=2)
 
         dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d ** -0.5)
 
