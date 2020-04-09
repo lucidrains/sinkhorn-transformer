@@ -108,18 +108,27 @@ class GELU_(nn.Module):
 GELU = nn.GELU if hasattr(nn, 'GELU') else GELU_
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, mult = 4, dropout = 0., activation = None):
+    def __init__(self, dim, mult = 4, dropout = 0., activation = None, glu = False):
         super().__init__()
         activation = default(activation, GELU)
 
-        self.net = nn.Sequential(
-            nn.Linear(dim, dim * mult),
-            activation(),
-            nn.Dropout(dropout),
-            nn.Linear(dim * mult, dim))
+        self.glu = glu
+        self.w1 = nn.Linear(dim, dim * mult * (2 if glu else 1))
+        self.act = activation()
+        self.dropout = nn.Dropout(dropout)
+        self.w2 = nn.Linear(dim * mult, dim)
 
     def forward(self, x):
-        return self.net(x)
+        if not self.glu:
+            x = self.w1(x)
+            x = self.act(x)
+        else:
+            x, v = self.w1(x).chunk(2, dim=-1)
+            x = self.act(x) * F.sigmoid(v)
+
+        x = self.dropout(x)
+        x = self.w2(x)
+        return x
 
 class PreNorm(nn.Module):
     def __init__(self, norm_class, dim, fn):
@@ -334,14 +343,19 @@ class SinkhornCausalAttention(nn.Module):
         return out
 
 class SinkhornSelfAttention(nn.Module):
-    def __init__(self, dim, heads = 8, buckets = 64, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, attn_dropout = 0., dropout = 0.):
+    def __init__(self, dim, heads = 8, buckets = 64, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, attn_dropout = 0., dropout = 0., context_only = False):
         super().__init__()
         assert divisible_by(dim, heads), f'dimension {dim} must be divisible by the number of heads {heads}'
+        assert not (causal and n_sortcut > 0), 'sortcut can only be used for non causal attention'
+        assert not (causal and context_only), 'context only self attention layer cannot be causal'
 
         self.heads = heads
         self.buckets = buckets
 
-        self.to_qkv = nn.Linear(dim, 3 * dim, bias=False)
+        self.context_only = context_only
+        self.to_q = nn.Linear(dim, dim, bias=False)
+        self.to_kv = nn.Linear(dim, dim * 2, bias=False) if not context_only else None
+
         self.to_out = nn.Linear(dim, dim)
 
         if causal:
@@ -352,12 +366,15 @@ class SinkhornSelfAttention(nn.Module):
         self.sinkhorn_attention = attn
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, context = None):
         b, t, d, h = *x.shape, self.heads
         assert divisible_by(t, self.buckets), f'sequence {t} needs to be divisible by bucket size {self.buckets}'
+        assert not (self.context_only and context is None), 'context key / values must be supplied if context self attention layer'
 
-        qkv = self.to_qkv(x).chunk(3, dim=2)
+        q = self.to_q(x)
+        kv = self.to_kv(x).chunk(2, dim=-1) if not self.context_only else (context, context)
 
+        qkv = (q, *kv)
         merge_heads_fn = partial(merge_heads, h)
         q, k, v = map(merge_heads_fn, qkv)
         out = self.sinkhorn_attention(q, k, v)
@@ -388,12 +405,12 @@ class Sequential(nn.Module):
         return x
 
 class SinkhornTransformer(nn.Module):
-    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False):
+    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, ff_glu = False):
         super().__init__()
         layers = nn.ModuleList([])
 
         get_attn = lambda: SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout)
-        get_ff = lambda: FeedForward(dim, dropout = ff_dropout)
+        get_ff = lambda: FeedForward(dim, dropout = ff_dropout, glu = ff_glu)
 
         if weight_tie:
             get_attn = cache_fn(get_attn)
@@ -412,14 +429,14 @@ class SinkhornTransformer(nn.Module):
         return self.layers(x)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, emb_dim = None):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, emb_dim = None):
         super().__init__()
         emb_dim = default(emb_dim, dim)
 
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
-        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, weight_tie = weight_tie)
+        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu)
 
         if emb_dim != dim:
             self.sinkhorn_transformer = ProjectInOut(self.sinkhorn_transformer, emb_dim, dim, project_out =(not return_embeddings))

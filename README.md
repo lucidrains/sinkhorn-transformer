@@ -47,6 +47,7 @@ s = SinkhornTransformerLM(
     attn_layer_dropout = 0.1, # post attention layer dropout
     weight_tie = True,        # tie layer parameters, from Albert paper
     emb_dim = 128,            # embedding factorization, from Albert paper
+    ff_glu = True,            # use GLU in feedforward, from paper 'GLU Variants Improve Transformer'
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -72,7 +73,7 @@ s(x) # (1, 2048, 1024)
 
 ## Todo
 
-1. Contextual key / values
+1. ~~Contextual key / values~~
 2. Full encoder / decoder, with argument routing for reversible network
 3. Find solution for input masking, potentially with topk of sorting matrix rows
 4. Add ability to add local attention heads
@@ -104,5 +105,14 @@ s(x) # (1, 2048, 1024)
     author      = {Zhenzhong Lan and Mingda Chen and Sebastian Goodman and Kevin Gimpel and Piyush Sharma and Radu Soricut},
     year        = {2019},
     url         = {https://arxiv.org/abs/1909.11942}
+}
+```
+
+```bibtex
+@misc{shazeer2020glu,
+    title   = {GLU Variants Improve Transformer},
+    author  = {Noam Shazeer},
+    year    = {2020},
+    url     = {https://arxiv.org/abs/2002.05202}    
 }
 ```
