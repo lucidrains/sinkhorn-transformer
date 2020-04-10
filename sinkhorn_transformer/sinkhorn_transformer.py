@@ -160,7 +160,7 @@ class ProjectInOut(nn.Module):
 
 # non-causal sortnet and sinkhorn attention
 
-class SortNet(nn.Module):
+class SimpleSortNet(nn.Module):
     def __init__(self, heads, buckets, dim):
         super().__init__()
         self.dim = dim
@@ -180,6 +180,26 @@ class SortNet(nn.Module):
         R = self.act(x @ W)
         return R
 
+class SimplePermutativeSortNet(nn.Module):
+    def __init__(self, heads, buckets, dim, temperature, sinkhorn_iter):
+        super().__init__()
+        self.net = SimpleSortNet(heads, buckets, dim)
+        self.temperature = temperature
+        self.sinkhorn_iter = sinkhorn_iter
+
+    def forward(self, q, k):
+        R = self.net(q, k)
+        return gumbel_sinkhorn(R, self.sinkhorn_iter, self.temperature)
+
+class SimpleNonPermutativeSortNet(nn.Module):
+    def __init__(self, heads, buckets, dim):
+        super().__init__()
+        self.net = SimpleSortNet(heads, buckets, dim)
+
+    def forward(self, q, k):
+        R = self.net(q, k)
+        return R.softmax(dim=-1)
+
 class SinkhornAttention(nn.Module):
     def __init__(self, buckets, dim, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None):
         super().__init__()
@@ -193,7 +213,14 @@ class SinkhornAttention(nn.Module):
         self.non_permutative = non_permutative
         self.sinkhorn_iter = sinkhorn_iter
         self.n_sortcut = n_sortcut
-        self.sort_net = SortNet(heads, self.kv_buckets, dim // heads * 2)
+
+        dim_heads = dim // heads
+
+        if non_permutative:
+            self.sort_net = SimpleNonPermutativeSortNet(heads, self.kv_buckets, dim_heads * 2)
+        else:
+            self.sort_net = SimplePermutativeSortNet(heads, self.kv_buckets, dim_heads * 2, temperature, sinkhorn_iter)
+
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, q, k, v, context=None):
@@ -212,10 +239,6 @@ class SinkhornAttention(nn.Module):
         # calculate reordering matrix R with simple sort net
 
         R = self.sort_net(q, k)
-
-        # gumbel sinkhorn
-
-        R = gumbel_sinkhorn(R, self.sinkhorn_iter, temperature) if not self.non_permutative else R.softmax(dim=-1)
         R = R.type_as(q).to(q)
 
         # only allow one bucket to be reordered to, needed for input masking to work
@@ -251,7 +274,7 @@ class SinkhornAttention(nn.Module):
 
 # causal sort net and reordered bucketing attention
 
-class CausalSortNet(nn.Module):
+class CausalSimpleSortNet(nn.Module):
     def __init__(self, heads, buckets, dim):
         super().__init__()
         self.dim = dim
@@ -271,7 +294,21 @@ class CausalSortNet(nn.Module):
         x = k_r[:, :, 0]
 
         W = expand_dim(self.linear, 0, b).reshape(bh, self.dim, buckets + 1)
-        return self.act(x @ W)
+        R = self.act(x @ W)
+
+        # softmax and mask to prevent future buckets going to past
+
+        mask_value = max_neg_value(q)
+        mask = torch.zeros((b * h, buckets, buckets + 1), device=R.device).bool()
+        i, j = torch.triu_indices(buckets, buckets)
+        mask[:, i, j + 1] = True
+
+        R.masked_fill_(mask, mask_value)
+        del mask
+
+        R = R.softmax(dim=-1)
+        R = R.tril(diagonal=-1) # extra insurance
+        return R
 
 class SinkhornCausalAttention(nn.Module):
     def __init__(self, buckets, dim, heads, dropout = 0., kv_buckets = None):
@@ -288,7 +325,7 @@ class SinkhornCausalAttention(nn.Module):
         self.null_key = nn.Parameter(torch.randn(heads, 1, dim_heads))
         self.null_value = nn.Parameter(torch.randn(heads, 1, dim_heads))
 
-        self.sort_net = CausalSortNet(heads, buckets, dim_heads * 2)
+        self.sort_net = CausalSimpleSortNet(heads, buckets, dim_heads * 2)
         self.dropout = nn.Dropout(dropout)
 
 
@@ -316,18 +353,6 @@ class SinkhornCausalAttention(nn.Module):
         # calculate R
 
         R = self.sort_net(q, k)
-
-        # softmax and mask to prevent future buckets going to past
-
-        mask_value = max_neg_value(q)
-        mask = torch.zeros((b * h, buckets, buckets + 1), device=device).bool()
-        i, j = torch.triu_indices(buckets, buckets)
-        mask[:, i, j + 1] = True
-        R.masked_fill_(mask, mask_value)
-        R = R.softmax(dim=-1)
-        R = R.tril(diagonal=-1) # extra insurance
-        del mask
-
         R = R.type_as(q).to(q)
 
         # only allow one bucket to be reordered to, needed for input masking to work
@@ -349,6 +374,8 @@ class SinkhornCausalAttention(nn.Module):
         b_v = torch.cat((b_v_r, b_v), dim=2)
 
         dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d ** -0.5)
+
+        mask_value = max_neg_value(q)
 
         mask = torch.ones((b, h, buckets, bsz, bsz * 2), device=device).bool()
         i, j = torch.triu_indices(bsz, bsz, 1)
