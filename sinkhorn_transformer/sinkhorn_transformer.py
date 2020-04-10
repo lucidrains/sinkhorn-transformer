@@ -363,6 +363,7 @@ class SinkhornSelfAttention(nn.Module):
 
         self.heads = heads
         self.buckets = buckets
+        self.kv_buckets = default(kv_buckets, buckets)
 
         self.context_only = context_only
         self.to_q = nn.Linear(dim, dim, bias=False)
@@ -385,6 +386,8 @@ class SinkhornSelfAttention(nn.Module):
 
         q = self.to_q(x)
         kv = self.to_kv(x).chunk(2, dim=-1) if not self.context_only else (context, context)
+
+        assert divisible_by(kv[0].shape[1], self.kv_buckets), 'key/value sequences need to be divisible by key/value bucket size'
 
         qkv = (q, *kv)
         merge_heads_fn = partial(merge_heads, h)
