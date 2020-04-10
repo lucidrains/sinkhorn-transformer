@@ -274,6 +274,21 @@ class SinkhornAttention(nn.Module):
 
 # causal sort net and reordered bucketing attention
 
+def mask_reordering_matrix(R):
+    buckets = R.shape[1]
+
+    mask_value = max_neg_value(R)
+    mask = torch.zeros(R.shape, device=R.device).bool()
+    i, j = torch.triu_indices(buckets, buckets)
+    mask[:, i, j + 1] = True
+
+    R.masked_fill_(mask, mask_value)
+    del mask
+
+    R = R.softmax(dim=-1)
+    R = R.tril(diagonal=-1) # extra insurance
+    return R
+
 class CausalSimpleSortNet(nn.Module):
     def __init__(self, heads, buckets, dim):
         super().__init__()
@@ -285,7 +300,7 @@ class CausalSimpleSortNet(nn.Module):
 
     def forward(self, q, k):
         bh, *_, h, buckets = *q.shape, self.heads, self.buckets
-        b = bh // self.heads
+        b = bh // h
 
         k_r = torch.cat((cumavg(k, dim=1), k), dim=-1)
         k_r = bucket(buckets, k_r)
@@ -296,22 +311,48 @@ class CausalSimpleSortNet(nn.Module):
         W = expand_dim(self.linear, 0, b).reshape(bh, self.dim, buckets + 1)
         R = self.act(x @ W)
 
-        # softmax and mask to prevent future buckets going to past
+        return mask_reordering_matrix(R)
 
-        mask_value = max_neg_value(q)
-        mask = torch.zeros((b * h, buckets, buckets + 1), device=R.device).bool()
-        i, j = torch.triu_indices(buckets, buckets)
-        mask[:, i, j + 1] = True
+class CausalAttentionSortNet(nn.Module):
+    def __init__(self, heads, buckets, dim, dim_sort):
+        super().__init__()
+        self.heads = heads
+        self.buckets = buckets
+        self.dim = dim
+        self.dim_sort = dim_sort
+        self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
+        self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
+        self.null_sort_k = nn.Parameter(torch.randn(1, heads, 1, dim_sort))
+        self.act = nn.LeakyReLU()
 
-        R.masked_fill_(mask, mask_value)
-        del mask
+    def forward(self, q, k):
+        bh, *_, h, buckets, dim, dim_sort = *q.shape, self.heads, self.buckets, self.dim, self.dim_sort
+        b = bh // h
 
-        R = R.softmax(dim=-1)
-        R = R.tril(diagonal=-1) # extra insurance
-        return R
+        Wsq = expand_dim(self.linear_sort_q, 0, b).reshape(bh, dim, dim_sort)
+        Wsk = expand_dim(self.linear_sort_k, 0, b).reshape(bh, dim, dim_sort)
+        nsk = expand_dim(self.null_sort_k, 0, b).reshape(bh, 1, dim_sort)
+
+        q_r = torch.cat((cumavg(q, dim=1), q), dim=-1)
+        k_r = torch.cat((cumavg(k, dim=1), k), dim=-1)
+
+        b_q = bucket(buckets, q_r)
+        b_k = bucket(buckets, k_r)
+
+        b_qi = b_q.sum(dim=2)
+        b_ki = b_k[:, :, 0]
+
+        sq = b_qi @ Wsq
+        sk = b_ki @ Wsk
+        sk = torch.cat((nsk, sk), dim=1)
+
+        R = torch.einsum('bie,bje->bij', sq, sk)
+        R = self.act(R)
+
+        return mask_reordering_matrix(R)
 
 class SinkhornCausalAttention(nn.Module):
-    def __init__(self, buckets, dim, heads, dropout = 0., kv_buckets = None):
+    def __init__(self, buckets, dim, heads, dropout = 0., kv_buckets = None, attn_sort_net = False):
         super().__init__()
         assert kv_buckets is None, 'different bucketing for key/values for causal reordering not supported yet'
 
@@ -322,12 +363,15 @@ class SinkhornCausalAttention(nn.Module):
         dim_heads = dim // heads
 
         # a learned null key / value for the first bucket (which has nothing in the past to sort to)
-        self.null_key = nn.Parameter(torch.randn(heads, 1, dim_heads))
-        self.null_value = nn.Parameter(torch.randn(heads, 1, dim_heads))
+        self.null_keys = nn.Parameter(torch.randn(heads, 1, dim_heads))
+        self.null_values = nn.Parameter(torch.randn(heads, 1, dim_heads))
 
-        self.sort_net = CausalSimpleSortNet(heads, buckets, dim_heads * 2)
+        if attn_sort_net:
+            self.sort_net = CausalAttentionSortNet(heads, buckets, dim_heads * 2, dim_heads)
+        else:
+            self.sort_net = CausalSimpleSortNet(heads, buckets, dim_heads * 2)
+
         self.dropout = nn.Dropout(dropout)
-
 
     def forward(self, q, k, v):
         b, h, t, d_h, d, heads, buckets, device = *q.shape, self.dim, self.heads, self.buckets, q.device
@@ -342,28 +386,28 @@ class SinkhornCausalAttention(nn.Module):
         k[hh_slice] = rotate_left(k[hh_slice], bsz-1, dim=2)
         v[hh_slice] = rotate_left(v[hh_slice], bsz-1, dim=2)
 
-        merge_batch_head = lambda x: x.reshape(b * h, t, d_h)
+        # merge batch and head
+
+        merge_batch_head = lambda x: x.reshape(bh, -1, d_h)
         q, k, v = map(merge_batch_head, (q, k, v))
 
         # bucket qkv
 
-        bucket_fn = partial(bucket, buckets)
-        b_q, b_k, b_v = map(bucket_fn, (q, k, v))
+        b_q, b_k, b_v = map(partial(bucket, buckets), (q, k, v))
 
         # calculate R
-
         R = self.sort_net(q, k)
         R = R.type_as(q).to(q)
 
         # only allow one bucket to be reordered to, needed for input masking to work
         R = zero_all_but_top(R, dim=2, k=1)
 
-        # add null key / value buckets at index 0
-        null_key_bucket = self.null_key[None, :, None, :, :].expand(b, -1, 1, bsz, -1).reshape(bh, 1, bsz, -1)
-        null_value_bucket = self.null_value[None, :, None, :, :].expand(b, -1, 1, bsz, -1).reshape(bh, 1, bsz, -1)
+        # add null key / values
+        b_null_k = self.null_keys[None, :, None, :, :].expand(b, h, 1, bsz, -1).reshape(bh, 1, bsz, -1)
+        b_null_v = self.null_values[None, :, None, :, :].expand(b, h, 1, bsz, -1).reshape(bh, 1, bsz, -1)
 
-        b_k_r = torch.cat((null_key_bucket, b_k), dim=1)
-        b_v_r = torch.cat((null_value_bucket, b_v), dim=1)
+        b_k_r = torch.cat((b_null_k, b_k), dim=1)
+        b_v_r = torch.cat((b_null_v, b_v), dim=1)
 
         # reorder buckets to buckets of the past
         b_k_r = reorder_buckets(b_k_r, R)
@@ -399,11 +443,12 @@ class SinkhornCausalAttention(nn.Module):
         return out
 
 class SinkhornSelfAttention(nn.Module):
-    def __init__(self, dim, heads = 8, buckets = 64, kv_buckets = None, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, attn_dropout = 0., dropout = 0., context_only = False):
+    def __init__(self, dim, heads = 8, buckets = 64, kv_buckets = None, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, attn_dropout = 0., dropout = 0., context_only = False, attn_sort_net = False):
         super().__init__()
         assert divisible_by(dim, heads), f'dimension {dim} must be divisible by the number of heads {heads}'
         assert not (causal and n_sortcut > 0), 'sortcut can only be used for non causal attention'
         assert not (causal and context_only), 'context only self attention layer cannot be causal'
+        assert not (not causal and attn_sort_net), 'using attention in the sorting net is only available for causal case for now'
 
         self.heads = heads
         self.buckets = buckets
@@ -416,7 +461,7 @@ class SinkhornSelfAttention(nn.Module):
         self.to_out = nn.Linear(dim, dim)
 
         if causal:
-            attn = SinkhornCausalAttention(buckets, dim, heads, dropout = attn_dropout, kv_buckets = kv_buckets)
+            attn = SinkhornCausalAttention(buckets, dim, heads, dropout = attn_dropout, kv_buckets = kv_buckets, attn_sort_net = attn_sort_net)
         else:
             attn = SinkhornAttention(buckets, dim, heads, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, dropout = attn_dropout, kv_buckets = kv_buckets)
 
@@ -464,11 +509,11 @@ class Sequential(nn.Module):
         return x
 
 class SinkhornTransformer(nn.Module):
-    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, kv_buckets = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, ff_glu = False):
+    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, kv_buckets = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, ff_glu = False, attn_sort_net = False):
         super().__init__()
         layers = nn.ModuleList([])
 
-        get_attn = lambda: SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout)
+        get_attn = lambda: SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, attn_sort_net = attn_sort_net)
         get_ff = lambda: FeedForward(dim, dropout = ff_dropout, glu = ff_glu)
 
         if weight_tie:
@@ -488,14 +533,14 @@ class SinkhornTransformer(nn.Module):
         return self.layers(x)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, kv_buckets = None, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, emb_dim = None):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, kv_buckets = None, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, emb_dim = None, attn_sort_net = False):
         super().__init__()
         emb_dim = default(emb_dim, dim)
 
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
-        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu)
+        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, attn_sort_net = attn_sort_net)
 
         if emb_dim != dim:
             self.sinkhorn_transformer = ProjectInOut(self.sinkhorn_transformer, emb_dim, dim, project_out =(not return_embeddings))
