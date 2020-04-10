@@ -158,6 +158,8 @@ class ProjectInOut(nn.Module):
         x = self.project_out(x)
         return x
 
+# non-causal sortnet and sinkhorn attention
+
 class SortNet(nn.Module):
     def __init__(self, heads, buckets, dim):
         super().__init__()
@@ -197,9 +199,8 @@ class SinkhornAttention(nn.Module):
     def forward(self, q, k, v, context=None):
         b, h, t, d_h, d, heads, temperature, buckets, kv_buckets, device = *q.shape, self.dim, self.heads, self.temperature, self.buckets, self.kv_buckets, q.device
 
-        q = q.reshape(b * h, t, d_h)
-        k = k.reshape(b * h, t, d_h)
-        v = v.reshape(b * h, t, d_h)
+        merge_batch_head = lambda x: x.reshape(b * h, t, d_h)
+        q, k, v = map(merge_batch_head, (q, k, v))
 
         # bucket query, key, values
 
@@ -248,17 +249,19 @@ class SinkhornAttention(nn.Module):
         out = out.reshape(b, h, t, d_h)
         return out
 
+# causal sort net and reordered bucketing attention
+
 class CausalSortNet(nn.Module):
     def __init__(self, heads, buckets, dim):
         super().__init__()
         self.dim = dim
         self.heads = heads
         self.buckets = buckets
-        self.linear = nn.Parameter(torch.randn(1, heads, dim, buckets))
+        self.linear = nn.Parameter(torch.randn(1, heads, dim, buckets + 1))
         self.act = nn.LeakyReLU()
 
     def forward(self, q, k):
-        bh, *_, buckets = *q.shape, self.buckets
+        bh, *_, h, buckets = *q.shape, self.heads, self.buckets
         b = bh // self.heads
 
         k_r = torch.cat((cumavg(k, dim=1), k), dim=-1)
@@ -267,24 +270,31 @@ class CausalSortNet(nn.Module):
         # for causal sort net, take the first token of each bucket to prevent leaking of future to past
         x = k_r[:, :, 0]
 
-        W = expand_dim(self.linear, 0, b).reshape(bh, self.dim, buckets)
+        W = expand_dim(self.linear, 0, b).reshape(bh, self.dim, buckets + 1)
         return self.act(x @ W)
 
 class SinkhornCausalAttention(nn.Module):
-    def __init__(self, buckets, dim, heads, temperature = 0.75, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None):
+    def __init__(self, buckets, dim, heads, dropout = 0., kv_buckets = None):
         super().__init__()
         assert kv_buckets is None, 'different bucketing for key/values for causal reordering not supported yet'
 
         self.dim = dim
         self.buckets = buckets
         self.heads = heads
-        self.temperature = temperature
-        self.sinkhorn_iter = sinkhorn_iter
-        self.sort_net = CausalSortNet(heads, buckets, dim // heads * 2)
+
+        dim_heads = dim // heads
+
+        # a learned null key / value for the first bucket (which has nothing in the past to sort to)
+        self.null_key = nn.Parameter(torch.randn(heads, 1, dim_heads))
+        self.null_value = nn.Parameter(torch.randn(heads, 1, dim_heads))
+
+        self.sort_net = CausalSortNet(heads, buckets, dim_heads * 2)
         self.dropout = nn.Dropout(dropout)
 
+
     def forward(self, q, k, v):
-        b, h, t, d_h, d, heads, temperature, buckets, device = *q.shape, self.dim, self.heads, self.temperature, self.buckets, q.device
+        b, h, t, d_h, d, heads, buckets, device = *q.shape, self.dim, self.heads, self.buckets, q.device
+        bh = b * h
 
         bsz = t // buckets
         hh = h // 2
@@ -295,9 +305,10 @@ class SinkhornCausalAttention(nn.Module):
         k[hh_slice] = rotate_left(k[hh_slice], bsz-1, dim=2)
         v[hh_slice] = rotate_left(v[hh_slice], bsz-1, dim=2)
 
-        q = q.reshape(b * h, t, d_h)
-        k = k.reshape(b * h, t, d_h)
-        v = v.reshape(b * h, t, d_h)
+        merge_batch_head = lambda x: x.reshape(b * h, t, d_h)
+        q, k, v = map(merge_batch_head, (q, k, v))
+
+        # bucket qkv
 
         bucket_fn = partial(bucket, buckets)
         b_q, b_k, b_v = map(bucket_fn, (q, k, v))
@@ -309,10 +320,9 @@ class SinkhornCausalAttention(nn.Module):
         # softmax and mask to prevent future buckets going to past
 
         mask_value = max_neg_value(q)
-        mask = torch.zeros((b * h, buckets, buckets), device=device).bool()
+        mask = torch.zeros((b * h, buckets, buckets + 1), device=device).bool()
         i, j = torch.triu_indices(buckets, buckets)
-        mask[:, 0, :] = True
-        mask[:, i, j] = True
+        mask[:, i, j + 1] = True
         R.masked_fill_(mask, mask_value)
         R = R.softmax(dim=-1)
         R = R.tril(diagonal=-1) # extra insurance
@@ -323,11 +333,18 @@ class SinkhornCausalAttention(nn.Module):
         # only allow one bucket to be reordered to, needed for input masking to work
         R = zero_all_but_top(R, dim=2, k=1)
 
-        # concat reordered buckets
+        # add null key / value buckets at index 0
+        null_key_bucket = self.null_key[None, :, None, :, :].expand(b, -1, 1, bsz, -1).reshape(bh, 1, bsz, -1)
+        null_value_bucket = self.null_value[None, :, None, :, :].expand(b, -1, 1, bsz, -1).reshape(bh, 1, bsz, -1)
 
-        b_k_r = reorder_buckets(b_k, R)
-        b_v_r = reorder_buckets(b_v, R)
+        b_k_r = torch.cat((null_key_bucket, b_k), dim=1)
+        b_v_r = torch.cat((null_value_bucket, b_v), dim=1)
 
+        # reorder buckets to buckets of the past
+        b_k_r = reorder_buckets(b_k_r, R)
+        b_v_r = reorder_buckets(b_v_r, R)
+
+        # and concatenate to original buckets themselves for local attention
         b_k = torch.cat((b_k_r, b_k), dim=2)
         b_v = torch.cat((b_v_r, b_v), dim=2)
 
@@ -372,7 +389,7 @@ class SinkhornSelfAttention(nn.Module):
         self.to_out = nn.Linear(dim, dim)
 
         if causal:
-            attn = SinkhornCausalAttention(buckets, dim, heads, temperature = temperature, dropout = attn_dropout, kv_buckets = kv_buckets)
+            attn = SinkhornCausalAttention(buckets, dim, heads, dropout = attn_dropout, kv_buckets = kv_buckets)
         else:
             attn = SinkhornAttention(buckets, dim, heads, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, dropout = attn_dropout, kv_buckets = kv_buckets)
 
