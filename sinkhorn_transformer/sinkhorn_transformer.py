@@ -187,6 +187,7 @@ class SimpleSortNet(nn.Module):
 
         W = expand_dim(self.linear, 0, b).reshape(b * self.heads, self.dim, buckets)
         R = self.act(x @ W)
+
         return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(R, self.sinkhorn_iter, self.temperature)
 
 class AttentionSortNet(nn.Module):
@@ -208,7 +209,7 @@ class AttentionSortNet(nn.Module):
         self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
 
     def forward(self, q, k):
-        bh, *_, buckets, dim, dim_sort = *q.shape, self.buckets, self.dim, self.dim_sort
+        bh, *_, buckets, device, dim, dim_sort = *q.shape, self.buckets, q.device, self.dim, self.dim_sort
         b = bh // self.heads
 
         b_q = bucket(buckets, q) if self.n_sortcut == 0 else bucket(1, q)
@@ -228,9 +229,9 @@ class AttentionSortNet(nn.Module):
             values, indices = torch.topk(R, self.n_sortcut)
             values = values.reshape(bh, self.n_sortcut, -1)
             indices = indices.reshape(bh, self.n_sortcut, -1)
-            R = torch.zeros(bh, self.n_sortcut, buckets).scatter_(2, indices, values)
+            R = torch.zeros((bh, self.n_sortcut, buckets), device=device).scatter(2, indices, values)
 
-        return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(R, self.sinkhorn_iter, self.temperature)
+        return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(F.relu(R), self.sinkhorn_iter, self.temperature)
 
 class SinkhornAttention(nn.Module):
     def __init__(self, buckets, dim, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None, attn_sort_net = False):
