@@ -161,11 +161,14 @@ class ProjectInOut(nn.Module):
 # non-causal sortnet and sinkhorn attention
 
 class SimpleSortNet(nn.Module):
-    def __init__(self, heads, buckets, dim):
+    def __init__(self, heads, buckets, dim, non_permutative, temperature, sinkhorn_iter):
         super().__init__()
         self.dim = dim
         self.heads = heads
         self.buckets = buckets
+        self.non_permutative = non_permutative
+        self.temperature = temperature
+        self.sinkhorn_iter = sinkhorn_iter
         self.linear = nn.Parameter(torch.randn(1, heads, dim, buckets))
         self.act = nn.ReLU()
 
@@ -178,30 +181,50 @@ class SimpleSortNet(nn.Module):
 
         W = expand_dim(self.linear, 0, b).reshape(b * self.heads, self.dim, buckets)
         R = self.act(x @ W)
-        return R
+        return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(R, self.sinkhorn_iter, self.temperature)
 
-class SimplePermutativeSortNet(nn.Module):
-    def __init__(self, heads, buckets, dim, temperature, sinkhorn_iter):
+class AttentionSortNet(nn.Module):
+    def __init__(self, heads, buckets, dim, dim_sort, non_permutative, temperature, sinkhorn_iter, n_sortcut = 0):
         super().__init__()
-        self.net = SimpleSortNet(heads, buckets, dim)
+        self.heads = heads
+        self.buckets = buckets
+        self.dim = dim
+        self.dim_sort = dim_sort
+        self.non_permutative = non_permutative
         self.temperature = temperature
         self.sinkhorn_iter = sinkhorn_iter
+        self.n_sortcut = n_sortcut
+
+        self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
+        self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
 
     def forward(self, q, k):
-        R = self.net(q, k)
-        return gumbel_sinkhorn(R, self.sinkhorn_iter, self.temperature)
+        bh, *_, buckets, dim, dim_sort = *q.shape, self.buckets, self.dim, self.dim_sort
+        b = bh // self.heads
 
-class SimpleNonPermutativeSortNet(nn.Module):
-    def __init__(self, heads, buckets, dim):
-        super().__init__()
-        self.net = SimpleSortNet(heads, buckets, dim)
+        b_q = bucket(buckets, q) if self.n_sortcut == 0 else bucket(1, q)
+        b_k = bucket(buckets, k)
 
-    def forward(self, q, k):
-        R = self.net(q, k)
-        return R.softmax(dim=-1)
+        Wsq = expand_dim(self.linear_sort_q, 0, b).reshape(bh, dim, dim_sort)
+        Wsk = expand_dim(self.linear_sort_k, 0, b).reshape(bh, dim, dim_sort)        
+
+        b_qi, b_ki = b_q.mean(dim=2), b_k.mean(dim=2)
+
+        sq = b_qi @ Wsq
+        sk = b_ki @ Wsk
+
+        R = torch.einsum('bie,bje->bij', sq, sk)
+
+        if self.n_sortcut > 0:
+            values, indices = torch.topk(R, self.n_sortcut)
+            values = values.reshape(bh, self.n_sortcut, -1)
+            indices = indices.reshape(bh, self.n_sortcut, -1)
+            R = torch.zeros(bh, self.n_sortcut, buckets).scatter_(2, indices, values)
+
+        return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(R, self.sinkhorn_iter, self.temperature)
 
 class SinkhornAttention(nn.Module):
-    def __init__(self, buckets, dim, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None):
+    def __init__(self, buckets, dim, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None, attn_sort_net = False):
         super().__init__()
         self.buckets = buckets
         self.kv_buckets = default(kv_buckets, buckets)
@@ -216,10 +239,10 @@ class SinkhornAttention(nn.Module):
 
         dim_heads = dim // heads
 
-        if non_permutative:
-            self.sort_net = SimpleNonPermutativeSortNet(heads, self.kv_buckets, dim_heads * 2)
+        if attn_sort_net:
+            self.sort_net = AttentionSortNet(heads, self.kv_buckets, dim_heads, dim_heads, non_permutative = non_permutative, temperature = temperature, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut)
         else:
-            self.sort_net = SimplePermutativeSortNet(heads, self.kv_buckets, dim_heads * 2, temperature, sinkhorn_iter)
+            self.sort_net = SimpleSortNet(heads, self.kv_buckets, dim_heads * 2, non_permutative = non_permutative, temperature = temperature, sinkhorn_iter = sinkhorn_iter)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -242,6 +265,7 @@ class SinkhornAttention(nn.Module):
         R = R.type_as(q).to(q)
 
         # only allow one bucket to be reordered to, needed for input masking to work
+
         R = zero_all_but_top(R, dim=2, k=1)
 
         # concatenate reordered buckets
@@ -320,10 +344,10 @@ class CausalAttentionSortNet(nn.Module):
         self.buckets = buckets
         self.dim = dim
         self.dim_sort = dim_sort
+
         self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
         self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
         self.null_sort_k = nn.Parameter(torch.randn(1, heads, 1, dim_sort))
-        self.act = nn.LeakyReLU()
 
     def forward(self, q, k):
         bh, *_, h, buckets, dim, dim_sort = *q.shape, self.heads, self.buckets, self.dim, self.dim_sort
@@ -339,7 +363,7 @@ class CausalAttentionSortNet(nn.Module):
         b_q = bucket(buckets, q_r)
         b_k = bucket(buckets, k_r)
 
-        b_qi = b_q.sum(dim=2)
+        b_qi = b_q.mean(dim=2)
         b_ki = b_k[:, :, 0]
 
         sq = b_qi @ Wsq
@@ -347,8 +371,6 @@ class CausalAttentionSortNet(nn.Module):
         sk = torch.cat((nsk, sk), dim=1)
 
         R = torch.einsum('bie,bje->bij', sq, sk)
-        R = self.act(R)
-
         return mask_reordering_matrix(R)
 
 class SinkhornCausalAttention(nn.Module):
@@ -448,7 +470,6 @@ class SinkhornSelfAttention(nn.Module):
         assert divisible_by(dim, heads), f'dimension {dim} must be divisible by the number of heads {heads}'
         assert not (causal and n_sortcut > 0), 'sortcut can only be used for non causal attention'
         assert not (causal and context_only), 'context only self attention layer cannot be causal'
-        assert not (not causal and attn_sort_net), 'using attention in the sorting net is only available for causal case for now'
 
         self.heads = heads
         self.buckets = buckets
@@ -463,7 +484,7 @@ class SinkhornSelfAttention(nn.Module):
         if causal:
             attn = SinkhornCausalAttention(buckets, dim, heads, dropout = attn_dropout, kv_buckets = kv_buckets, attn_sort_net = attn_sort_net)
         else:
-            attn = SinkhornAttention(buckets, dim, heads, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, dropout = attn_dropout, kv_buckets = kv_buckets)
+            attn = SinkhornAttention(buckets, dim, heads, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, dropout = attn_dropout, kv_buckets = kv_buckets, attn_sort_net = attn_sort_net)
 
         self.sinkhorn_attention = attn
         self.dropout = nn.Dropout(dropout)
