@@ -89,6 +89,12 @@ def expand_dim(t, dim, k):
     expand_shape[dim] = k
     return t.expand(*expand_shape)
 
+def expand_batch_and_merge_head(b, t):
+    shape = list(t.squeeze(0).shape)
+    t = expand_dim(t, 0, b)
+    shape[0] = shape[0] * b
+    return t.reshape(*shape)
+
 def zero_all_but_top(x, dim, k=1):
     values, indices = torch.topk(x, k, dim=dim)
     return torch.zeros_like(x).scatter_(dim, indices, values)
@@ -195,8 +201,11 @@ class AttentionSortNet(nn.Module):
         self.sinkhorn_iter = sinkhorn_iter
         self.n_sortcut = n_sortcut
 
-        self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
-        self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
+        self.q_pos_emb = nn.Parameter(torch.randn(1, heads, buckets if n_sortcut == 0 else 1, dim))
+        self.k_pos_emb = nn.Parameter(torch.randn(1, heads, buckets, dim))
+
+        self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
+        self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
 
     def forward(self, q, k):
         bh, *_, buckets, dim, dim_sort = *q.shape, self.buckets, self.dim, self.dim_sort
@@ -205,10 +214,10 @@ class AttentionSortNet(nn.Module):
         b_q = bucket(buckets, q) if self.n_sortcut == 0 else bucket(1, q)
         b_k = bucket(buckets, k)
 
-        Wsq = expand_dim(self.linear_sort_q, 0, b).reshape(bh, dim, dim_sort)
-        Wsk = expand_dim(self.linear_sort_k, 0, b).reshape(bh, dim, dim_sort)        
+        Wsq, Wsk, pos_q, pos_k = map(partial(expand_batch_and_merge_head, b), (self.linear_sort_q, self.linear_sort_k, self.q_pos_emb, self.k_pos_emb))
 
-        b_qi, b_ki = b_q.mean(dim=2), b_k.mean(dim=2)
+        b_qi = torch.cat((b_q.mean(dim=2), pos_q), dim=-1)
+        b_ki = torch.cat((b_k.mean(dim=2), pos_k), dim=-1)
 
         sq = b_qi @ Wsq
         sk = b_ki @ Wsk
@@ -345,30 +354,30 @@ class CausalAttentionSortNet(nn.Module):
         self.dim = dim
         self.dim_sort = dim_sort
 
-        self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
-        self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim, dim_sort))
-        self.null_sort_k = nn.Parameter(torch.randn(1, heads, 1, dim_sort))
+        self.q_pos_emb = nn.Parameter(torch.randn(1, heads, buckets, dim))
+        self.k_pos_emb = nn.Parameter(torch.randn(1, heads, buckets, dim))
+
+        self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
+        self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
 
     def forward(self, q, k):
         bh, *_, h, buckets, dim, dim_sort = *q.shape, self.heads, self.buckets, self.dim, self.dim_sort
         b = bh // h
 
-        Wsq = expand_dim(self.linear_sort_q, 0, b).reshape(bh, dim, dim_sort)
-        Wsk = expand_dim(self.linear_sort_k, 0, b).reshape(bh, dim, dim_sort)
-        nsk = expand_dim(self.null_sort_k, 0, b).reshape(bh, 1, dim_sort)
+        Wsq, Wsk, pos_q, pos_k = map(partial(expand_batch_and_merge_head, b), (self.linear_sort_q, self.linear_sort_k, self.q_pos_emb, self.k_pos_emb))
 
-        q_r = torch.cat((cumavg(q, dim=1), q), dim=-1)
         k_r = torch.cat((cumavg(k, dim=1), k), dim=-1)
+        k_r = bucket(buckets, k_r)
 
-        b_q = bucket(buckets, q_r)
-        b_k = bucket(buckets, k_r)
+        b_q_r = b_k_r = k_r[:, :, 0]
 
-        b_qi = b_q.mean(dim=2)
-        b_ki = b_k[:, :, 0]
+        b_qi = torch.cat((b_q_r, pos_q), dim=-1)
+        b_ki = torch.cat((b_k_r, pos_k), dim=-1)
 
         sq = b_qi @ Wsq
         sk = b_ki @ Wsk
-        sk = torch.cat((nsk, sk), dim=1)
+
+        sk = F.pad(sk, (0, 0, 1, 0))
 
         R = torch.einsum('bie,bje->bij', sq, sk)
         return mask_reordering_matrix(R)
