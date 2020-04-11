@@ -88,6 +88,7 @@ enc = SinkhornTransformerLM(
     heads = 8,
     buckets = 32,
     max_seq_len = DE_SEQ_LEN,
+    reversible = True,
     return_embeddings = True
 ).cuda()
 
@@ -102,11 +103,11 @@ dec = SinkhornTransformerLM(
     reversible = True
 ).cuda()
 
-x = torch.randint(0, 20000, (1, 128)).cuda()
-y = torch.randint(0, 20000, (1, 128)).cuda()
+x = torch.randint(0, 20000, (1, DE_SEQ_LEN)).cuda()
+y = torch.randint(0, 20000, (1, EN_SEQ_LEN)).cuda()
 
 context = enc(x)
-dec(y, context=context) # (1, 128, 20000)
+dec(y, context=context) # (1, 4096, 20000)
 ```
 
 ## Citations

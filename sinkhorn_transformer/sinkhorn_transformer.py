@@ -129,7 +129,7 @@ class FeedForward(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.w2 = nn.Linear(dim * mult, dim)
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         if not self.glu:
             x = self.w1(x)
             x = self.act(x)
@@ -499,7 +499,7 @@ class SinkhornSelfAttention(nn.Module):
         self.sinkhorn_attention = attn
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, context = None):
+    def forward(self, x, context = None, input_mask = None):
         b, t, d, h = *x.shape, self.heads
         assert divisible_by(t, self.buckets), f'sequence {t} needs to be divisible by bucket size {self.buckets}'
         assert not (self.context_only and context is None), 'context key / values must be supplied if context self attention layer'
@@ -575,7 +575,7 @@ class SinkhornTransformer(nn.Module):
         self.layers = execute_type(layers, args_route = args_route)
         self.receives_context = receives_context
 
-    def forward(self, x, **kwargs):
+    def forward(self, x, input_mask = None, **kwargs):
         assert ('context' not in kwargs or self.receives_context), 'needs to be initted with receives_context True if passing contextual key / values'
         return self.layers(x, **kwargs)
 
@@ -594,7 +594,7 @@ class SinkhornTransformerLM(nn.Module):
 
         self.to_logits = identity if return_embeddings else nn.Linear(emb_dim, num_tokens)
 
-    def forward(self, x, **kwargs):
+    def forward(self, x, input_mask = None, **kwargs):
         _, t, device = *x.shape, x.device
         assert t <= self.max_seq_len, f'sequence length {t} is greater than maximum sequence length {self.max_seq_len}'
 
