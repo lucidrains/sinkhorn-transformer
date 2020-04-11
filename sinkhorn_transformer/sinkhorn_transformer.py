@@ -52,8 +52,8 @@ def unbucket(v):
     b, *_, e = v.shape
     return v.reshape(b, -1, e)
 
-def sample_gumbel(shape, device, eps=1e-6):
-    u = torch.empty(shape, device = device).uniform_(0, 1)
+def sample_gumbel(shape, device, dtype, eps=1e-6):
+    u = torch.empty(shape, device=device, dtype=dtype).uniform_(0, 1)
     return -log(-log(u, eps), eps)
 
 def sinkhorn_sorting_operator(r, n_iters=8):
@@ -65,7 +65,7 @@ def sinkhorn_sorting_operator(r, n_iters=8):
 
 def gumbel_sinkhorn(r, n_iters=8, temperature=0.7):
     r = log(r)
-    gumbel = sample_gumbel(r.shape, r.device)
+    gumbel = sample_gumbel(r.shape, r.device, r.dtype)
     r = (r + gumbel) / temperature
     return sinkhorn_sorting_operator(r, n_iters)
 
@@ -205,7 +205,7 @@ class AttentionSortNet(nn.Module):
         self.k_pos_emb = nn.Parameter(torch.randn(1, heads, buckets, dim))
 
     def forward(self, q, k):
-        bh, *_, buckets, device, dim = *q.shape, self.buckets, q.device, self.dim
+        bh, *_, buckets, device, dtype, dim = *q.shape, self.buckets, q.device, q.dtype, self.dim
         b = bh // self.heads
 
         b_q = bucket(buckets, q) if self.n_sortcut == 0 else bucket(1, q)
@@ -216,13 +216,13 @@ class AttentionSortNet(nn.Module):
         sq = b_q.mean(dim=2) + pos_q
         sk = b_k.mean(dim=2) + pos_k
 
-        R = torch.einsum('bie,bje->bij', sq, sk)
+        R = torch.einsum('bie,bje->bij', sq, sk).to(q)
 
         if self.n_sortcut > 0:
             values, indices = torch.topk(R, self.n_sortcut)
             values = values.reshape(bh, self.n_sortcut, -1)
             indices = indices.reshape(bh, self.n_sortcut, -1)
-            R = torch.zeros(bh, self.n_sortcut, buckets).to(q).scatter(2, indices, values)
+            R = torch.zeros(bh, self.n_sortcut, buckets, device=device, dtype=dtype).scatter(2, indices, values)
 
         return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(F.relu(R), self.sinkhorn_iter, self.temperature)
 
