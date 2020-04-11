@@ -191,12 +191,11 @@ class SimpleSortNet(nn.Module):
         return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(R, self.sinkhorn_iter, self.temperature)
 
 class AttentionSortNet(nn.Module):
-    def __init__(self, heads, buckets, dim, dim_sort, non_permutative, temperature, sinkhorn_iter, n_sortcut = 0):
+    def __init__(self, heads, buckets, dim, non_permutative, temperature, sinkhorn_iter, n_sortcut = 0):
         super().__init__()
         self.heads = heads
         self.buckets = buckets
         self.dim = dim
-        self.dim_sort = dim_sort
         self.non_permutative = non_permutative
         self.temperature = temperature
         self.sinkhorn_iter = sinkhorn_iter
@@ -205,23 +204,17 @@ class AttentionSortNet(nn.Module):
         self.q_pos_emb = nn.Parameter(torch.randn(1, heads, buckets if n_sortcut == 0 else 1, dim))
         self.k_pos_emb = nn.Parameter(torch.randn(1, heads, buckets, dim))
 
-        self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
-        self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
-
     def forward(self, q, k):
-        bh, *_, buckets, device, dim, dim_sort = *q.shape, self.buckets, q.device, self.dim, self.dim_sort
+        bh, *_, buckets, device, dim = *q.shape, self.buckets, q.device, self.dim
         b = bh // self.heads
 
         b_q = bucket(buckets, q) if self.n_sortcut == 0 else bucket(1, q)
         b_k = bucket(buckets, k)
 
-        Wsq, Wsk, pos_q, pos_k = map(partial(expand_batch_and_merge_head, b), (self.linear_sort_q, self.linear_sort_k, self.q_pos_emb, self.k_pos_emb))
+        pos_q, pos_k = map(partial(expand_batch_and_merge_head, b), (self.q_pos_emb, self.k_pos_emb))
 
-        b_qi = torch.cat((b_q.mean(dim=2), pos_q), dim=-1)
-        b_ki = torch.cat((b_k.mean(dim=2), pos_k), dim=-1)
-
-        sq = b_qi @ Wsq
-        sk = b_ki @ Wsk
+        sq = b_q.mean(dim=2) + pos_q
+        sk = b_k.mean(dim=2) + pos_k
 
         R = torch.einsum('bie,bje->bij', sq, sk)
 
@@ -250,7 +243,7 @@ class SinkhornAttention(nn.Module):
         dim_heads = dim // heads
 
         if attn_sort_net:
-            self.sort_net = AttentionSortNet(heads, self.kv_buckets, dim_heads, dim_heads, non_permutative = non_permutative, temperature = temperature, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut)
+            self.sort_net = AttentionSortNet(heads, self.kv_buckets, dim_heads, non_permutative = non_permutative, temperature = temperature, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut)
         else:
             self.sort_net = SimpleSortNet(heads, self.kv_buckets, dim_heads * 2, non_permutative = non_permutative, temperature = temperature, sinkhorn_iter = sinkhorn_iter)
 
@@ -348,35 +341,29 @@ class CausalSimpleSortNet(nn.Module):
         return mask_reordering_matrix(R)
 
 class CausalAttentionSortNet(nn.Module):
-    def __init__(self, heads, buckets, dim, dim_sort):
+    def __init__(self, heads, buckets, dim):
         super().__init__()
         self.heads = heads
         self.buckets = buckets
         self.dim = dim
-        self.dim_sort = dim_sort
 
         self.q_pos_emb = nn.Parameter(torch.randn(1, heads, buckets, dim))
         self.k_pos_emb = nn.Parameter(torch.randn(1, heads, buckets, dim))
 
-        self.linear_sort_q = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
-        self.linear_sort_k = nn.Parameter(torch.randn(1, heads, dim * 2, dim_sort))
-
     def forward(self, q, k):
-        bh, *_, h, buckets, dim, dim_sort = *q.shape, self.heads, self.buckets, self.dim, self.dim_sort
+        bh, *_, h, buckets, dim = *q.shape, self.heads, self.buckets, self.dim
         b = bh // h
 
-        Wsq, Wsk, pos_q, pos_k = map(partial(expand_batch_and_merge_head, b), (self.linear_sort_q, self.linear_sort_k, self.q_pos_emb, self.k_pos_emb))
+        pos_q, pos_k = map(partial(expand_batch_and_merge_head, b), (self.q_pos_emb, self.k_pos_emb))
 
-        k_r = torch.cat((cumavg(k, dim=1), k), dim=-1)
-        k_r = bucket(buckets, k_r)
+        q_r = bucket(buckets, cumavg(q, dim=1))
+        k_r = bucket(buckets, cumavg(k, dim=1))
 
-        b_q_r = b_k_r = k_r[:, :, 0]
+        b_q_r = q_r[:, :, 0]
+        b_k_r = k_r.sum(dim=2)
 
-        b_qi = torch.cat((b_q_r, pos_q), dim=-1)
-        b_ki = torch.cat((b_k_r, pos_k), dim=-1)
-
-        sq = b_qi @ Wsq
-        sk = b_ki @ Wsk
+        sq = b_q_r + pos_q
+        sk = b_k_r + pos_k
 
         sk = F.pad(sk, (0, 0, 1, 0))
 
@@ -399,7 +386,7 @@ class SinkhornCausalAttention(nn.Module):
         self.null_values = nn.Parameter(torch.randn(heads, 1, dim_heads))
 
         if attn_sort_net:
-            self.sort_net = CausalAttentionSortNet(heads, buckets, dim_heads * 2, dim_heads)
+            self.sort_net = CausalAttentionSortNet(heads, buckets, dim_heads)
         else:
             self.sort_net = CausalSimpleSortNet(heads, buckets, dim_heads * 2)
 
