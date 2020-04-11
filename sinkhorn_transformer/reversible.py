@@ -3,6 +3,18 @@ import torch.nn as nn
 from torch.autograd.function import Function
 from torch.utils.checkpoint import get_device_states, set_device_states
 
+# for routing arguments into the functions of the reversible layer
+def route_args(router, args, depth):
+    routed_args = [(dict(), dict()) for _ in range(depth)]
+    matched_keys = [key for key in args.keys() if key in router]
+
+    for key in matched_keys:
+        val = args[key]
+        for depth, ((f_args, g_args), routes) in enumerate(zip(routed_args, router[key])):
+            new_f_args, new_g_args = map(lambda route: ({key: val} if route else {}), routes)
+            routed_args[depth] = ({**f_args, **new_f_args}, {**g_args, **new_g_args})
+    return routed_args
+
 # following example for saving and setting rng here https://pytorch.org/docs/stable/_modules/torch/utils/checkpoint.html
 class Deterministic(nn.Module):
     def __init__(self, net):
@@ -94,10 +106,10 @@ class ReversibleBlock(nn.Module):
 
 class _ReversibleFunction(Function):
     @staticmethod
-    def forward(ctx, x, blocks, kwargs):
-        ctx.kwargs = kwargs
-        for block in blocks:
-            x = block(x, **kwargs)
+    def forward(ctx, x, blocks, args):
+        ctx.args = args
+        for block, kwarg in zip(blocks, args):
+            x = block(x, **kwarg)
         ctx.y = x.detach()
         ctx.blocks = blocks
         return x
@@ -105,26 +117,26 @@ class _ReversibleFunction(Function):
     @staticmethod
     def backward(ctx, dy):
         y = ctx.y
-        kwargs = ctx.kwargs
-        for block in ctx.blocks[::-1]:
+        args = ctx.args
+        for block, kwargs in zip(ctx.blocks[::-1], args[::-1]):
             y, dy = block.backward_pass(y, dy, **kwargs)
         return dy, None, None
 
 class ReversibleSequence(nn.Module):
-    def __init__(self, blocks, layer_dropout = 0.):
+    def __init__(self, blocks, args_route = {}, layer_dropout = 0.):
         super().__init__()
+        self.args_route = args_route
         self.layer_dropout = layer_dropout
         self.blocks = nn.ModuleList([ReversibleBlock(f=f, g=g) for f, g in blocks])
 
-    def forward(self, x, arg_route = (True, True), **kwargs):
+    def forward(self, x, **kwargs):
         blocks = self.blocks
+        block_args = route_args(self.args_route, kwargs, len(self.blocks))
 
         if self.training and self.layer_dropout > 0:
             to_drop = torch.empty(len(self.blocks)).uniform_(0, 1) < self.layer_dropout
             blocks = [block for block, drop in zip(self.blocks, to_drop) if not drop]
             blocks = self.blocks[:1] if len(blocks) == 0 else blocks
 
-        f_args, g_args = map(lambda route: kwargs if route else {}, arg_route)
-        block_kwargs = {'f_args': f_args, 'g_args': g_args}        
-
-        return _ReversibleFunction.apply(x, blocks, block_kwargs)
+        block_args = list(map(lambda x: {'f_args': x[0], 'g_args': x[1]}, block_args))
+        return _ReversibleFunction.apply(x, blocks, block_args)

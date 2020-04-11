@@ -22,7 +22,7 @@ $ pip install sinkhorn_transformer
 
 ## Use
 
-A SinkhornTransformer based language model
+A Sinkhorn Transformer based language model
 
 ```python
 import torch
@@ -70,6 +70,43 @@ s = SinkhornTransformer(
 
 x = torch.randn(1, 2048, 1024)
 s(x) # (1, 2048, 1024)
+```
+
+Sinkhorn Encoder / Decoder Transformer
+
+```python
+import torch
+from sinkhorn_transformer import SinkhornTransformerLM
+
+DE_SEQ_LEN = 4096
+EN_SEQ_LEN = 4096
+
+enc = SinkhornTransformerLM(
+    num_tokens = 20000,
+    dim = 512,
+    depth = 6,
+    heads = 8,
+    buckets = 32,
+    max_seq_len = DE_SEQ_LEN,
+    return_embeddings = True
+).cuda()
+
+dec = SinkhornTransformerLM(
+    num_tokens = 20000,
+    dim = 512,
+    depth = 6,
+    causal = True,
+    buckets = 32,
+    max_seq_len = EN_SEQ_LEN,
+    receives_context = True,
+    reversible = True
+).cuda()
+
+x = torch.randint(0, 20000, (1, 128)).cuda()
+y = torch.randint(0, 20000, (1, 128)).cuda()
+
+context = enc(x)
+dec(y, context=context) # (1, 128, 20000)
 ```
 
 ## Citations

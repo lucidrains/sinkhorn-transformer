@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from functools import partial, wraps
-from sinkhorn_transformer.reversible import ReversibleSequence
+from sinkhorn_transformer.reversible import ReversibleSequence, route_args
 
 # helper functions
 
@@ -519,9 +519,9 @@ class SinkhornSelfAttention(nn.Module):
         return out
 
 class Reversible(nn.Module):
-    def __init__(self, layers):
+    def __init__(self, layers, args_route={}):
         super().__init__()
-        self.layers = ReversibleSequence(layers)
+        self.layers = ReversibleSequence(layers, args_route=args_route)
 
     def forward(self, x, **kwargs):
         x = torch.cat([x, x], dim=-1)
@@ -529,27 +529,32 @@ class Reversible(nn.Module):
         return torch.stack(x.chunk(2, dim=-1)).sum(dim=0)
 
 class Sequential(nn.Module):
-    def __init__(self, layers):
+    def __init__(self, layers, args_route = {}):
         super().__init__()
         self.layers = layers
+        self.args_route = args_route
 
     def forward(self, x, **kwargs):
-        for f, g in self.layers:
-            x = x + f(x, **kwargs)
-            x = x + g(x, **kwargs)
+        args = route_args(self.args_route, kwargs, len(self.layers))
+
+        for (f, g), (f_args, g_args) in zip(self.layers, args):
+            x = x + f(x, **f_args)
+            x = x + g(x, **g_args)
         return x
 
 class SinkhornTransformer(nn.Module):
-    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, kv_buckets = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, ff_glu = False, attn_sort_net = False):
+    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, kv_buckets = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, ff_glu = False, attn_sort_net = False, receives_context = False):
         super().__init__()
         layers = nn.ModuleList([])
 
         get_attn = lambda: SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, attn_sort_net = attn_sort_net)
         get_ff = lambda: FeedForward(dim, dropout = ff_dropout, glu = ff_glu)
 
+        get_attn_context = lambda: SinkhornSelfAttention(dim, context_only = True, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, attn_sort_net = attn_sort_net)
+        get_ff_context = lambda: FeedForward(dim, dropout = ff_dropout, glu = ff_glu)
+
         if weight_tie:
-            get_attn = cache_fn(get_attn)
-            get_ff = cache_fn(get_ff)
+            get_attn, get_attn_context, get_ff, get_ff_context = map(cache_fn, (get_attn, get_attn_context, get_ff, get_ff_context))
 
         for _ in range(depth):
             layers.append(nn.ModuleList([
@@ -557,32 +562,43 @@ class SinkhornTransformer(nn.Module):
                 PreNorm(nn.LayerNorm, dim, Chunk(ff_chunks, get_ff(), along_dim=1))
             ]))
 
-        execute_type = Reversible if reversible else Sequential
-        self.layers = execute_type(layers)
+            if receives_context:
+                layers.append(nn.ModuleList([
+                    PreNorm(nn.LayerNorm, dim, get_attn_context()),
+                    PreNorm(nn.LayerNorm, dim, Chunk(ff_chunks, get_ff_context(), along_dim=1))
+                ]))
 
-    def forward(self, x, input_mask = None):
-        return self.layers(x)
+        execute_type = Reversible if reversible else Sequential
+
+        context_map = ((False, False), (True, False)) * depth
+        args_route = {'context': context_map} if receives_context else {}
+        self.layers = execute_type(layers, args_route = args_route)
+        self.receives_context = receives_context
+
+    def forward(self, x, **kwargs):
+        assert ('context' not in kwargs or self.receives_context), 'needs to be initted with receives_context True if passing contextual key / values'
+        return self.layers(x, **kwargs)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, kv_buckets = None, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, emb_dim = None, attn_sort_net = False):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, kv_buckets = None, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, emb_dim = None, attn_sort_net = False, receives_context = False):
         super().__init__()
         emb_dim = default(emb_dim, dim)
 
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
-        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, attn_sort_net = attn_sort_net)
+        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, attn_sort_net = attn_sort_net, receives_context = receives_context)
 
         if emb_dim != dim:
             self.sinkhorn_transformer = ProjectInOut(self.sinkhorn_transformer, emb_dim, dim, project_out =(not return_embeddings))
 
         self.to_logits = identity if return_embeddings else nn.Linear(emb_dim, num_tokens)
 
-    def forward(self, x, input_mask = None):
+    def forward(self, x, **kwargs):
         _, t, device = *x.shape, x.device
         assert t <= self.max_seq_len, f'sequence length {t} is greater than maximum sequence length {self.max_seq_len}'
 
         x = self.to_token_emb(x)
         x = self.pos_emb(torch.arange(t, device=device)) + x
-        x = self.sinkhorn_transformer(x)
+        x = self.sinkhorn_transformer(x, **kwargs)
         return self.to_logits(x)
