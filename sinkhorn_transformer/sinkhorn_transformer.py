@@ -229,7 +229,7 @@ class AttentionSortNet(nn.Module):
             values, indices = torch.topk(R, self.n_sortcut)
             values = values.reshape(bh, self.n_sortcut, -1)
             indices = indices.reshape(bh, self.n_sortcut, -1)
-            R = torch.zeros((bh, self.n_sortcut, buckets), device=device).scatter(2, indices, values)
+            R = torch.zeros(bh, self.n_sortcut, buckets).to(q).scatter(2, indices, values)
 
         return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(F.relu(R), self.sinkhorn_iter, self.temperature)
 
