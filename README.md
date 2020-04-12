@@ -49,6 +49,7 @@ s = SinkhornTransformerLM(
     weight_tie = True,        # tie layer parameters, from Albert paper
     emb_dim = 128,            # embedding factorization, from Albert paper
     ff_glu = True,            # use GLU in feedforward, from paper 'GLU Variants Improve Transformer'
+    n_local_attn_heads = 2,   # replace N heads with local attention, suggested to work well from Routing Transformer paper
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -146,6 +147,15 @@ dec(y, context=context) # (1, 4096, 20000)
     author  = {Noam Shazeer},
     year    = {2020},
     url     = {https://arxiv.org/abs/2002.05202}
+}
+```
+
+```bibtex
+@misc{roy*2020efficient,
+    title   = {Efficient Content-Based Sparse Attention with Routing Transformers},
+    author  = {Aurko Roy* and Mohammad Taghi Saffar* and David Grangier and Ashish Vaswani},
+    year    = {2020},
+    url     = {https://openreview.net/forum?id=B1gjs6EtDr}
 }
 ```
 

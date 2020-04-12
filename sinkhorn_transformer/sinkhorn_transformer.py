@@ -302,7 +302,7 @@ class AttentionSortNet(nn.Module):
         return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(F.relu(R), self.sinkhorn_iter, self.temperature)
 
 class SinkhornAttention(nn.Module):
-    def __init__(self, buckets, dim, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None, attn_sort_net = False):
+    def __init__(self, buckets, dim, dim_heads, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None, attn_sort_net = False):
         super().__init__()
         self.buckets = buckets
         self.kv_buckets = default(kv_buckets, buckets)
@@ -314,8 +314,6 @@ class SinkhornAttention(nn.Module):
         self.non_permutative = non_permutative
         self.sinkhorn_iter = sinkhorn_iter
         self.n_sortcut = n_sortcut
-
-        dim_heads = dim // heads
 
         if attn_sort_net:
             self.sort_net = AttentionSortNet(heads, self.kv_buckets, dim_heads, non_permutative = non_permutative, temperature = temperature, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut)
@@ -446,15 +444,13 @@ class CausalAttentionSortNet(nn.Module):
         return mask_reordering_matrix(R)
 
 class SinkhornCausalAttention(nn.Module):
-    def __init__(self, buckets, dim, heads, dropout = 0., kv_buckets = None, attn_sort_net = False):
+    def __init__(self, buckets, dim, dim_heads, heads, dropout = 0., kv_buckets = None, attn_sort_net = False):
         super().__init__()
         assert kv_buckets is None, 'different bucketing for key/values for causal reordering not supported yet'
 
         self.dim = dim
         self.buckets = buckets
         self.heads = heads
-
-        dim_heads = dim // heads
 
         # a learned null key / value for the first bucket (which has nothing in the past to sort to)
         self.null_keys = nn.Parameter(torch.randn(heads, 1, dim_heads))
@@ -468,7 +464,7 @@ class SinkhornCausalAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, q, k, v):
-        b, h, t, d_h, d, heads, buckets, device = *q.shape, self.dim, self.heads, self.buckets, q.device
+        b, h, t, d_h, d, buckets, device = *q.shape, self.dim, self.buckets, q.device
         bh = b * h
 
         bsz = t // buckets
@@ -554,15 +550,17 @@ class SinkhornSelfAttention(nn.Module):
 
         self.to_out = nn.Linear(dim, dim)
 
+        self.n_local_attn_heads = n_local_attn_heads
+        self.local_attention = LocalAttention(buckets, causal, dropout = attn_dropout, look_forward=(1 if not causal else 0))
+
+        sink_heads = heads - n_local_attn_heads
+        dim_heads = dim // heads
         if causal:
-            attn = SinkhornCausalAttention(buckets, dim, heads, dropout = attn_dropout, kv_buckets = kv_buckets, attn_sort_net = attn_sort_net)
+            attn = SinkhornCausalAttention(buckets, dim, dim_heads, sink_heads, dropout = attn_dropout, kv_buckets = kv_buckets, attn_sort_net = attn_sort_net)
         else:
-            attn = SinkhornAttention(buckets, dim, heads, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, dropout = attn_dropout, kv_buckets = kv_buckets, attn_sort_net = attn_sort_net)
+            attn = SinkhornAttention(buckets, dim, dim_heads, sink_heads, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, dropout = attn_dropout, kv_buckets = kv_buckets, attn_sort_net = attn_sort_net)
 
         self.sinkhorn_attention = attn
-
-        self.n_local_attn_heads = n_local_attn_heads
-        self.local_attention = LocalAttention(buckets, causal)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -582,13 +580,14 @@ class SinkhornSelfAttention(nn.Module):
 
         split_index_fn = partial(split_at_index, 1, l_h)
         (lq, q), (lk, k), (lv, v) = map(split_index_fn, (q, k, v))
+        has_local, has_sinkhorn = map(lambda x: x.shape[1] > 0, (lq, q))
 
         out = []
 
-        if lq.shape[1] > 0:
+        if has_local > 0:
             out.append(self.local_attention(lq, lk, lv, input_mask = input_mask))
 
-        if q.shape[1] > 0:
+        if has_sinkhorn > 0:
             out.append(self.sinkhorn_attention(q, k, v))
 
         out = torch.cat(out, dim=1)
