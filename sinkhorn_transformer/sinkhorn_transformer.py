@@ -621,14 +621,15 @@ class Sequential(nn.Module):
         return x
 
 class SinkhornTransformer(nn.Module):
-    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, kv_buckets = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, ff_glu = False, attn_sort_net = False, receives_context = False, n_local_attn_heads = 0):
+    def __init__(self, dim, depth, causal = False, heads = 8, buckets = 64, kv_buckets = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, ff_glu = False, attn_sort_net = False, receives_context = False, context_buckets = None, context_n_sortcut = 2, n_local_attn_heads = 0):
         super().__init__()
-        layers = nn.ModuleList([])
+        layers = nn.ModuleList([])        
+        context_buckets = default(context_buckets, buckets)
 
         get_attn = lambda: SinkhornSelfAttention(dim, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, attn_sort_net = attn_sort_net, n_local_attn_heads = n_local_attn_heads)
         get_ff = lambda: FeedForward(dim, dropout = ff_dropout, glu = ff_glu)
 
-        get_attn_context = lambda: SinkhornSelfAttention(dim, context_only = True, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, attn_sort_net = attn_sort_net)
+        get_attn_context = lambda: SinkhornSelfAttention(dim, context_only = True, heads = heads, buckets = buckets, kv_buckets = context_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = context_n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, attn_sort_net = attn_sort_net)
         get_ff_context = lambda: FeedForward(dim, dropout = ff_dropout, glu = ff_glu)
 
         if weight_tie:
@@ -658,14 +659,14 @@ class SinkhornTransformer(nn.Module):
         return self.layers(x, **kwargs)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, kv_buckets = None, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, emb_dim = None, attn_sort_net = False, receives_context = False, n_local_attn_heads = 0):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, kv_buckets = None, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., weight_tie = False, emb_dim = None, attn_sort_net = False, receives_context = False, context_buckets = None, context_n_sortcut = 2, n_local_attn_heads = 0):
         super().__init__()
         emb_dim = default(emb_dim, dim)
 
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
-        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, attn_sort_net = attn_sort_net, receives_context = receives_context, n_local_attn_heads = n_local_attn_heads)
+        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, attn_sort_net = attn_sort_net, receives_context = receives_context, context_buckets = context_buckets, context_n_sortcut = context_n_sortcut, n_local_attn_heads = n_local_attn_heads)
 
         if emb_dim != dim:
             self.sinkhorn_transformer = ProjectInOut(self.sinkhorn_transformer, emb_dim, dim, project_out =(not return_embeddings))
