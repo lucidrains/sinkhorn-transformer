@@ -94,11 +94,6 @@ def gumbel_sinkhorn(r, n_iters=8, temperature=0.7):
 def reorder_buckets(t, r):
     return torch.einsum('buv,bvtd->butd', r, t)
 
-def reorder_masks(m, r):
-    r_mask = r.clone().detach()
-    r_mask[r_mask.nonzero(as_tuple=True)] = 1
-    return torch.einsum('buv,bvt->but', r_mask, m.type_as(r_mask)).bool()
-
 def log(t, eps = 1e-6):
     return torch.log(t + eps)
 
@@ -110,6 +105,10 @@ def cumavg(t, dim):
     expand_slice = [None] * len(t.shape)
     expand_slice[dim] = slice(None, None)
     return t.cumsum(dim=dim) / r[tuple(expand_slice)]
+
+def batched_index_select(values, indices):
+    last_dim = values.shape[-1]
+    return values.gather(1, indices[:, :, None].expand(-1, -1, last_dim))
 
 def expand_dim(t, dim, k):
     expand_shape = [-1] * len(t.shape)
@@ -393,7 +392,7 @@ class SinkhornAttention(nn.Module):
             expand_head_and_merge_into_batch = lambda x: merge_dims(0, 1, expand_dim(x.unsqueeze(1), 1, h))
             mq, mk = map(expand_head_and_merge_into_batch, (mq, mk))
 
-            mk_r = reorder_masks(mk, R)
+            mk_r = batched_index_select(mk, R.abs().argmax(dim=-1))
 
             if self.n_sortcut > 0:
                 mk_r = mk_r[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut)
@@ -562,7 +561,7 @@ class SinkhornCausalAttention(nn.Module):
             mq, mk = map(expand_head_and_merge_into_batch, (mq, mk))
 
             mk_with_null = F.pad(mk, (0, 0, 1, 0), value=True)
-            mk_r = reorder_masks(mk_with_null, R)
+            mk_r = batched_index_select(mk_with_null, R.abs().argmax(dim=-1))
 
             mk = torch.cat((mk_r, mk), dim=2)
             mask = mq[:, :, :, None] * mk[:, :, None, :]
