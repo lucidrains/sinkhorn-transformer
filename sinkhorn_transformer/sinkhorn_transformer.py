@@ -659,6 +659,7 @@ class SinkhornSelfAttention(nn.Module):
 class Reversible(nn.Module):
     def __init__(self, layers, args_route={}):
         super().__init__()
+        assert all(len(route) == len(layers) for route in args_route.values()), 'each argument route map must have the same depth as the number of reversible layers'
         self.layers = ReversibleSequence(layers, args_route=args_route)
 
     def forward(self, x, **kwargs):
@@ -669,6 +670,7 @@ class Reversible(nn.Module):
 class Sequential(nn.Module):
     def __init__(self, layers, args_route = {}):
         super().__init__()
+        assert all(len(route) == len(layers) for route in args_route.values()), 'each argument route map must have the same depth as the number of sequential layers'
         self.layers = layers
         self.args_route = args_route
 
@@ -709,8 +711,9 @@ class SinkhornTransformer(nn.Module):
 
         execute_type = Reversible if reversible else Sequential
 
-        route_attn = ((True, False), (True, False)) * depth
-        route_context = ((False, False), (True, False)) * depth
+        attn_context_layer = ((True, False),) if receives_context else tuple()
+        route_attn = ((True, False), *attn_context_layer) * depth
+        route_context = ((False, False), *attn_context_layer) * depth
 
         context_route_map = {'context': route_context, 'context_mask': route_context} if receives_context else {}
         attn_route_map = {'input_mask': route_attn}
