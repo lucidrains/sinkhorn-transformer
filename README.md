@@ -107,8 +107,11 @@ dec = SinkhornTransformerLM(
 x = torch.randint(0, 20000, (1, DE_SEQ_LEN)).cuda()
 y = torch.randint(0, 20000, (1, EN_SEQ_LEN)).cuda()
 
-context = enc(x)
-dec(y, context=context) # (1, 4096, 20000)
+x_mask = torch.ones_like(x).bool().cuda()
+y_mask = torch.ones_like(y).bool().cuda()
+
+context = enc(x, input_mask=x_mask)
+dec(y, context=context, input_mask=y_mask, context_mask=x_mask) # (1, 4096, 20000)
 ```
 
 ## Citations
