@@ -2,17 +2,24 @@ import math
 import torch
 from torch import nn
 import torch.nn.functional as F
-from functools import partial, wraps
+from inspect import isfunction
+from functools import partial, wraps, reduce
 from sinkhorn_transformer.reversible import ReversibleSequence, route_args
 
 # helper functions
 
 def identity(x, *args, **kwargs): return x
 
-def default(x, d): return d if x is None else x
+def default(x, d):
+    if x is None:
+        return d if not isfunction(d) else d()
+    return x
 
 def divisible_by(num, divisor):
     return (num / divisor).is_integer()
+
+def all_none(*arr):
+    return all(el is None for el in arr)
 
 def cache_fn(f):
     cache = None
@@ -36,6 +43,12 @@ def rotate_right(t, n, dim=0):
     l = (*pre_slices, slice(-n, None))
     r = (*pre_slices, slice(None, -n))
     return torch.cat((t[l], t[r]), dim=dim)
+
+def merge_dims(ind_from, ind_to, tensor):
+    shape = list(tensor.shape)
+    arr_slice = slice(ind_from, ind_to + 1)
+    shape[arr_slice] = [reduce((lambda x, y: x * y), shape[arr_slice])]
+    return tensor.reshape(*shape)
 
 def merge_heads(h, v):
     b, t, d = v.shape
@@ -80,6 +93,11 @@ def gumbel_sinkhorn(r, n_iters=8, temperature=0.7):
 
 def reorder_buckets(t, r):
     return torch.einsum('buv,bvtd->butd', r, t)
+
+def reorder_masks(m, r):
+    r_mask = r.clone().detach()
+    r_mask[r_mask.nonzero(as_tuple=True)] = 1
+    return torch.einsum('buv,bvt->but', r_mask, m.type_as(r_mask)).bool()
 
 def log(t, eps = 1e-6):
     return torch.log(t + eps)
@@ -174,9 +192,9 @@ class ProjectInOut(nn.Module):
         self.project_in = nn.Linear(dim_in, dim_out)
         self.project_out = nn.Linear(dim_out, dim_in) if project_out else identity
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = self.project_in(x)
-        x = self.fn(x)
+        x = self.fn(x, **kwargs)
         x = self.project_out(x)
         return x
 
@@ -192,14 +210,14 @@ class LocalAttention(nn.Module):
         self.look_forward = look_forward
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, q, k, v, input_mask = None):
+    def forward(self, q, k, v, q_mask = None, kv_mask = None):
         buckets, causal, look_backward, look_forward = self.buckets, self.causal, self.look_backward, self.look_forward
         b, h, t, e, device, dtype = *q.shape, q.device, q.dtype
 
         ticker = torch.arange(t, device=device, dtype=dtype)[None, :]
         b_t = bucket(buckets, ticker)
 
-        merge_batch_and_heads = lambda x: x.reshape(b * h, t, e)
+        merge_batch_and_heads = partial(merge_dims, 0, 1)
         q, k, v = map(merge_batch_and_heads, (q, k, v))
 
         bucket_fn = partial(bucket, buckets)
@@ -224,11 +242,14 @@ class LocalAttention(nn.Module):
         dots.masked_fill_(mask, mask_value)
         del mask
 
-        if input_mask is not None:
-            input_mask = input_mask.reshape(b * h, t)
-            mq = bucket(buckets, input_mask)
-            mk = look_around(mq, pad_value = False, **look_around_kwargs)
-            mask = (mq[:, :, :, None] * mk[:, :, None, :])
+        if not all_none(q_mask, kv_mask):
+            q_mask = default(q_mask, lambda: torch.ones((b, t), device=device).bool())
+            kv_mask = default(kv_mask, q_mask)
+            mq, mk = map(bucket_fn, (q_mask, kv_mask))
+
+            mk = look_around(mk, pad_value = False, **look_around_kwargs)
+            mask = (mq[:, None, :, :, None] * mk[:, None, :, None, :])
+            mask = merge_batch_and_heads(mask.expand(-1, h, -1, -1, -1))
             dots.masked_fill_(~mask, mask_value)
             del mask
 
@@ -322,7 +343,7 @@ class SinkhornAttention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, q, k, v, context=None):
+    def forward(self, q, k, v, q_mask = None, kv_mask = None):
         b, h, t, d_h, d, heads, temperature, buckets, kv_buckets, device = *q.shape, self.dim, self.heads, self.temperature, self.buckets, self.kv_buckets, q.device
 
         merge_batch_head = lambda x: x.reshape(b * h, t, d_h)
@@ -331,7 +352,7 @@ class SinkhornAttention(nn.Module):
         # bucket query, key, values
 
         b_q = bucket(buckets, q)
-        b_k, b_v = map(partial(bucket, self.kv_buckets), (k, v))
+        b_k, b_v = map(partial(bucket, kv_buckets), (k, v))
 
         bsz = b_k.shape[2]
 
@@ -361,6 +382,27 @@ class SinkhornAttention(nn.Module):
         b_v = torch.cat((b_v_r, b_v), dim=2) if buckets == kv_buckets else b_v_r
 
         dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d ** -0.5)
+
+        # mask 
+        mask_value = max_neg_value(dots)
+
+        if not all_none(q_mask, kv_mask):
+            q_mask = default(q_mask, lambda: torch.ones((b, t), device=device).bool())
+            kv_mask = default(kv_mask, q_mask)
+            mq, mk = bucket(buckets, q_mask), bucket(kv_buckets, kv_mask)
+            expand_head_and_merge_into_batch = lambda x: merge_dims(0, 1, expand_dim(x.unsqueeze(1), 1, h))
+            mq, mk = map(expand_head_and_merge_into_batch, (mq, mk))
+
+            mk_r = reorder_masks(mk, R)
+
+            if self.n_sortcut > 0:
+                mk_r = mk_r[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut)
+                mk_r = expand_dim(mk_r, 1, buckets)
+
+            mk = torch.cat((mk_r, mk), dim=2) if buckets == kv_buckets else mk_r
+            mask = mq[:, :, :, None] * mk[:, :, None, :]
+            dots.masked_fill_(~mask, mask_value)
+            del mask            
 
         # attention
         dots = dots.softmax(dim=-1)
@@ -463,7 +505,7 @@ class SinkhornCausalAttention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, q, k, v):
+    def forward(self, q, k, v, q_mask = None, kv_mask = None):
         b, h, t, d_h, d, buckets, device = *q.shape, self.dim, self.buckets, q.device
         bh = b * h
 
@@ -478,7 +520,7 @@ class SinkhornCausalAttention(nn.Module):
 
         # merge batch and head
 
-        merge_batch_head = lambda x: x.reshape(bh, -1, d_h)
+        merge_batch_head = partial(merge_dims, 0, 1)
         q, k, v = map(merge_batch_head, (q, k, v))
 
         # bucket qkv
@@ -509,7 +551,23 @@ class SinkhornCausalAttention(nn.Module):
 
         dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d ** -0.5)
 
+        # mask
         mask_value = max_neg_value(q)
+
+        if not all_none(q_mask, kv_mask):
+            q_mask = default(q_mask, lambda: torch.ones((b, t), device=device).bool())
+            kv_mask = default(kv_mask, q_mask)
+            mq, mk = bucket(buckets, q_mask), bucket(buckets, kv_mask)
+            expand_head_and_merge_into_batch = lambda x: merge_dims(0, 1, expand_dim(x.unsqueeze(1), 1, h))
+            mq, mk = map(expand_head_and_merge_into_batch, (mq, mk))
+
+            mk_with_null = F.pad(mk, (0, 0, 1, 0), value=True)
+            mk_r = reorder_masks(mk_with_null, R)
+
+            mk = torch.cat((mk_r, mk), dim=2)
+            mask = mq[:, :, :, None] * mk[:, :, None, :]
+            dots.masked_fill_(~mask, mask_value)
+            del mask
 
         mask = torch.ones((b, h, buckets, bsz, bsz * 2), device=device).bool()
         i, j = torch.triu_indices(bsz, bsz, 1)
@@ -564,13 +622,15 @@ class SinkhornSelfAttention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, context = None, input_mask = None):
+    def forward(self, x, input_mask = None, context = None, context_mask = None):
         b, t, d, h, l_h = *x.shape, self.heads, self.n_local_attn_heads
         assert divisible_by(t, self.buckets), f'sequence {t} needs to be divisible by bucket size {self.buckets}'
         assert not (self.context_only and context is None), 'context key / values must be supplied if context self attention layer'
 
         q = self.to_q(x)
+
         kv = self.to_kv(x).chunk(2, dim=-1) if not self.context_only else (context, context)
+        kv_mask = input_mask if not self.context_only else context_mask
 
         assert divisible_by(kv[0].shape[1], self.kv_buckets), 'key/value sequences need to be divisible by key/value bucket size'
 
@@ -585,10 +645,10 @@ class SinkhornSelfAttention(nn.Module):
         out = []
 
         if has_local > 0:
-            out.append(self.local_attention(lq, lk, lv, input_mask = input_mask))
+            out.append(self.local_attention(lq, lk, lv, q_mask = input_mask, kv_mask = kv_mask))
 
         if has_sinkhorn > 0:
-            out.append(self.sinkhorn_attention(q, k, v))
+            out.append(self.sinkhorn_attention(q, k, v, q_mask = input_mask, kv_mask = kv_mask))
 
         out = torch.cat(out, dim=1)
         out = split_heads(h, out)
@@ -649,12 +709,16 @@ class SinkhornTransformer(nn.Module):
 
         execute_type = Reversible if reversible else Sequential
 
-        context_map = ((False, False), (True, False)) * depth
-        args_route = {'context': context_map} if receives_context else {}
-        self.layers = execute_type(layers, args_route = args_route)
+        route_attn = ((True, False), (True, False)) * depth
+        route_context = ((False, False), (True, False)) * depth
+
+        context_route_map = {'context': route_context, 'context_mask': route_context} if receives_context else {}
+        attn_route_map = {'input_mask': route_attn}
+
+        self.layers = execute_type(layers, args_route = {**context_route_map, **attn_route_map})
         self.receives_context = receives_context
 
-    def forward(self, x, input_mask = None, **kwargs):
+    def forward(self, x, **kwargs):
         assert ('context' not in kwargs or self.receives_context), 'needs to be initted with receives_context True if passing contextual key / values'
         return self.layers(x, **kwargs)
 
@@ -673,7 +737,7 @@ class SinkhornTransformerLM(nn.Module):
 
         self.to_logits = identity if return_embeddings else nn.Linear(emb_dim, num_tokens)
 
-    def forward(self, x, input_mask = None, **kwargs):
+    def forward(self, x, **kwargs):
         _, t, device = *x.shape, x.device
         assert t <= self.max_seq_len, f'sequence length {t} is greater than maximum sequence length {self.max_seq_len}'
 
