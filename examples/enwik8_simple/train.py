@@ -48,7 +48,8 @@ model = SinkhornTransformerLM(
     causal = True,
     reversible = True,
     weight_tie = True,
-    attn_dropout = 0.1
+    attn_dropout = 0.1,
+    n_local_attn_heads = 4
 )
 
 model = AutoregressiveWrapper(model)
