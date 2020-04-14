@@ -4,6 +4,8 @@
 
 <img src="./sinkhorn.png" width="500">
 
+<img src="./sortcut.png" width="500">
+
 ---
 
 This is a reproduction of the work outlined in <a href="https://arxiv.org/abs/2002.11296">Sparse Sinkhorn Attention</a>, with additional enhancements.
