@@ -28,7 +28,7 @@ def add_argument():
                        help='local rank passed from distributed launcher')
 
     parser = deepspeed.add_config_arguments(parser)
-    args=parser.parse_args()
+    args = parser.parse_args()
     return args
 
 # constants
@@ -39,7 +39,7 @@ GRADIENT_ACCUMULATE_EVERY = 4
 LEARNING_RATE = 1e-4
 VALIDATE_EVERY  = 100
 GENERATE_EVERY  = 500
-GENERATE_LENGTH = 512
+GENERATE_LENGTH = 1024
 SEQ_LEN = 4096
 
 # helpers
@@ -116,7 +116,7 @@ for i, data in enumerate(trainloader):
             loss = model(inp[None, :].cuda(), return_loss = True)
             print(f'validation loss: {loss.item()}')
 
-    if i % GENERATE_EVERY == 0:
+    if model_engine.local_rank == 0 and i % GENERATE_EVERY == 0:
         model.eval()
         inp = random.choice(val_dataset)[:-1]
         prime = decode_tokens(inp)

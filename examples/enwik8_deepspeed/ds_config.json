@@ -1,10 +1,11 @@
 {
   "train_batch_size": 4,
   "steps_per_print": 2000,
+  "max_grad_norm": 0.5,
   "optimizer": {
     "type": "Adam",
     "params": {
-      "lr": 0.001,
+      "lr": 0.0003,
       "betas": [
         0.8,
         0.999
