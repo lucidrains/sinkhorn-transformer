@@ -16,7 +16,7 @@ def default(x, d):
     return x
 
 def divisible_by(num, divisor):
-    return (num / divisor).is_integer()
+    return num % divisor == 0
 
 def all_none(*arr):
     return all(el is None for el in arr)
