@@ -16,7 +16,7 @@ def default(x, d):
     return x
 
 def divisible_by(num, divisor):
-    return (num % divisor) == 0
+    return (num / divisor).is_integer()
 
 def all_none(*arr):
     return all(el is None for el in arr)
@@ -125,18 +125,11 @@ def zero_all_but_top(x, dim, k=1):
     values, indices = torch.topk(x, k, dim=dim)
     return torch.zeros_like(x).scatter_(dim, indices, values)
 
-@torch.jit.script
-def tensor_iterator_wrapper(padded_x, t, forward, backward):
-    int_t = int(t.item())
-    int_forward = int(forward.item())
-    int_backward = int(backward.item())
-    return [padded_x[:, ind:(ind + int_t), ...] for ind in range(int_forward + int_backward + 1)]
-
 def look_around(x, backward = 1, forward = 0, pad_value = -1, dim=2):
     t = x.shape[1]
     dims = (len(x.shape) - dim) * (0, 0)
-    padded_x = F.pad(x, (*dims, backward, forward), value = pad_value)
-    tensors = tensor_iterator_wrapper(padded_x, torch.tensor(t), torch.tensor(forward), torch.tensor(backward))
+    padded_x = F.pad(x, (*dims, backward, forward), value= pad_value)
+    tensors = [padded_x[:, ind:(ind + t), ...] for ind in range(forward + backward + 1)]
     return torch.cat(tensors, dim=dim)
 
 # helper classes
