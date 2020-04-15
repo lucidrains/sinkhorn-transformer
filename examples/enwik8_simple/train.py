@@ -44,10 +44,9 @@ model = SinkhornTransformerLM(
     num_tokens = 256,
     heads = 8,
     buckets = 32,
-    ff_chunks = 10,
+    ff_chunks = 2,
     causal = True,
     reversible = True,
-    weight_tie = True,
     attn_dropout = 0.1,
     n_local_attn_heads = 4
 )

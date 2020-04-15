@@ -48,6 +48,7 @@ s = SinkhornTransformerLM(
     ff_dropout = 0.1,         # feedforward dropout
     attn_dropout = 0.1,       # post attention dropout
     attn_layer_dropout = 0.1, # post attention layer dropout
+    layer_dropout = 0.1,      # add layer dropout, from 'Reducing Transformer Depth on Demand' paper
     weight_tie = True,        # tie layer parameters, from Albert paper
     emb_dim = 128,            # embedding factorization, from Albert paper
     ff_glu = True,            # use GLU in feedforward, from paper 'GLU Variants Improve Transformer'
@@ -161,6 +162,16 @@ dec(y, context=context, input_mask=y_mask, context_mask=x_mask) # (1, 4096, 2000
     author  = {Aurko Roy* and Mohammad Taghi Saffar* and David Grangier and Ashish Vaswani},
     year    = {2020},
     url     = {https://openreview.net/forum?id=B1gjs6EtDr}
+}
+```
+
+```bibtex
+@inproceedings{fan2020reducing,
+    title     ={Reducing Transformer Depth on Demand with Structured Dropout},
+    author    ={Angela Fan and Edouard Grave and Armand Joulin},
+    booktitle ={International Conference on Learning Representations},
+    year      ={2020},
+    url       ={https://openreview.net/forum?id=SylO2yStDr}
 }
 ```
 
