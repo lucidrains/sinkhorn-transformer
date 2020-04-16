@@ -38,10 +38,7 @@ s = SinkhornTransformerLM(
     buckets = 64,
     max_seq_len = 8192,
     causal = False,           # auto-regressive or not
-    sinkhorn_iter = 7,        # number of sinkhorn iterations - default is set at reported best in paper
-    n_sortcut = 2,            # use sortcut to reduce complexity to linear time
-    temperature = 0.75,       # gumbel temperature - default is set at reported best in paper
-    non_permutative = False,  # allow buckets of keys to be sorted to queries more than once
+    n_sortcut = 2,            # use sortcut to reduce memory complexity to linear
     ff_chunks = 10,           # feedforward chunking, from Reformer paper
     reversible = True,        # make network reversible, from Reformer paper
     ff_dropout = 0.1,         # feedforward dropout
@@ -114,6 +111,32 @@ y_mask = torch.ones_like(y).bool().cuda()
 
 context = enc(x, input_mask=x_mask)
 dec(y, context=context, input_mask=y_mask, context_mask=x_mask) # (1, 4096, 20000)
+```
+
+## Sinkhorn
+
+This repository has diverged from the paper and is now using attention in place of the original sorting net + gumbel sinkhorn sampling. I have not found a noticeable difference in performance yet, and the new scheme allows me to generalize the network to flexible sequence lengths. If you would like to try Sinkhorn, please use the following settings, which only works for non-causal networks.
+
+```python
+import torch
+from sinkhorn_transformer import SinkhornTransformerLM
+
+s = SinkhornTransformerLM(
+    num_tokens = 20000,
+    dim = 1024,
+    heads = 8,
+    depth = 12,
+    buckets = 64,
+    max_seq_len = 8192,
+    use_simple_sort_net = True, # turn off attention sort net
+    sinkhorn_iter = 7,          # number of sinkhorn iterations - default is set at reported best in paper
+    n_sortcut = 2,              # use sortcut to reduce complexity to linear time
+    temperature = 0.75,         # gumbel temperature - default is set at reported best in paper
+    non_permutative = False,    # allow buckets of keys to be sorted to queries more than once
+)
+
+x = torch.randint(0, 20000, (1, 8192))
+s(x) # (1, 8192, 20000)
 ```
 
 ## Citations
