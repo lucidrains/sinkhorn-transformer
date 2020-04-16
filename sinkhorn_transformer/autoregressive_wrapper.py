@@ -25,13 +25,13 @@ def top_k(logits, thres = 0.9):
     return probs
 
 class AutoregressiveWrapper(nn.Module):
-    def __init__(self, net, ignore_index = -100, pad_value = 0):
+    def __init__(self, net, ignore_index = -100, pad_value = 0, pad_left = True):
         super().__init__()
         assert isinstance(net, SinkhornTransformerLM), 'generative trainer wrapper can only accept SinkhornTransformerLM class'
         self.pad_value = pad_value
         self.ignore_index = ignore_index
 
-        self.net = Autopadder(net)
+        self.net = Autopadder(net, pad_left = pad_left)
         self.max_seq_len = net.max_seq_len
 
     @torch.no_grad()

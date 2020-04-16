@@ -132,7 +132,7 @@ s = SinkhornTransformerLM(
     causal = True
 )
 
-s = Autopadder(s) # autopadder will fetch the bucket size and autopad input
+s = Autopadder(s, pad_left=True) # autopadder will fetch the bucket size and autopad input
 
 x = torch.randint(0, 20000, (1, 1117)) # odd sequence length
 s(x) # (1, 1117, 20000)
