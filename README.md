@@ -100,6 +100,7 @@ dec = SinkhornTransformerLM(
     bucket_size = 128,
     max_seq_len = EN_SEQ_LEN,
     receives_context = True,
+    context_bucket_size = 128,  # context key / values can be bucketed differently
     reversible = True
 ).cuda()
 
