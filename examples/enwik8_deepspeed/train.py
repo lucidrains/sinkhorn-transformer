@@ -53,13 +53,13 @@ def decode_tokens(tokens):
 # instantiate model
 
 model = SinkhornTransformerLM(
+    num_tokens = 256,
     emb_dim = 128,
     dim = 512,
     depth = 8,
     max_seq_len = SEQ_LEN,
-    num_tokens = 256,
     heads = 8,
-    buckets = 32,
+    bucket_size = 128,
     ff_chunks = 10,
     causal = True,
     reversible = True,
