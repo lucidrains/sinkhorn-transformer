@@ -349,7 +349,7 @@ class AttentionSortNet(nn.Module):
         return R.softmax(dim=-1) if self.non_permutative else gumbel_sinkhorn(F.relu(R), self.sinkhorn_iter, self.temperature)
 
 class SinkhornAttention(nn.Module):
-    def __init__(self, buckets, dim, dim_heads, heads, temperature = 0.75, non_permutative = False, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None, use_simple_sort_net = False):
+    def __init__(self, buckets, dim, dim_heads, heads, temperature = 0.75, non_permutative = True, sinkhorn_iter = 7, n_sortcut = 0, dropout = 0., kv_buckets = None, use_simple_sort_net = False):
         super().__init__()
         self.buckets = buckets
         self.kv_buckets = default(kv_buckets, buckets)
@@ -609,7 +609,7 @@ class SinkhornCausalAttention(nn.Module):
         return out
 
 class SinkhornSelfAttention(nn.Module):
-    def __init__(self, dim, heads = 8, buckets = 64, kv_buckets = None, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, attn_dropout = 0., dropout = 0., context_only = False, use_simple_sort_net = False, n_local_attn_heads = 0):
+    def __init__(self, dim, heads = 8, buckets = 64, kv_buckets = None, causal = False, non_permutative = True, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, attn_dropout = 0., dropout = 0., context_only = False, use_simple_sort_net = False, n_local_attn_heads = 0):
         super().__init__()
         assert divisible_by(dim, heads), f'dimension {dim} must be divisible by the number of heads {heads}'
         assert not (causal and n_sortcut > 0), 'sortcut can only be used for non causal attention'
@@ -726,7 +726,7 @@ class SinkhornTransformer(nn.Module):
         return self.layers(x, **kwargs)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, kv_buckets = None, heads = 8, causal = False, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., layer_dropout = 0., weight_tie = False, emb_dim = None, use_simple_sort_net = False, receives_context = False, context_buckets = None, context_n_sortcut = 2, n_local_attn_heads = 0):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, buckets = 64, kv_buckets = None, heads = 8, causal = False, non_permutative = True, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., layer_dropout = 0., weight_tie = False, emb_dim = None, use_simple_sort_net = False, receives_context = False, context_buckets = None, context_n_sortcut = 2, n_local_attn_heads = 0):
         super().__init__()
         emb_dim = default(emb_dim, dim)
 
