@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn
+from operator import mul
 import torch.nn.functional as F
 from inspect import isfunction
 from functools import partial, wraps, reduce
@@ -47,7 +48,7 @@ def rotate_right(t, n, dim=0):
 def merge_dims(ind_from, ind_to, tensor):
     shape = list(tensor.shape)
     arr_slice = slice(ind_from, ind_to + 1)
-    shape[arr_slice] = [reduce((lambda x, y: x * y), shape[arr_slice])]
+    shape[arr_slice] = [reduce(mul, shape[arr_slice])]
     return tensor.reshape(*shape)
 
 def merge_heads(h, v):
@@ -196,6 +197,37 @@ class ProjectInOut(nn.Module):
         x = self.fn(x, **kwargs)
         x = self.project_out(x)
         return x
+
+# positional embeddings
+
+class AxialPositionalEncoding(nn.Module):
+    def __init__(self, dim, max_seq_len, axial_shape = ()):
+        super().__init__()
+        assert reduce(mul, axial_shape, 1) == max_seq_len, 'axial position shape must multiply up to max sequence length'
+
+        self.dim = dim
+        self.seq_len = max_seq_len
+        self.shape = axial_shape
+
+        self.weights = nn.ParameterList([])
+        for ind, shape in enumerate(self.shape):
+            ax_shape = [1] * len(self.shape)
+            ax_shape[ind] = shape
+            ax_shape = (1, *ax_shape, dim)
+            ax_emb = nn.Parameter(torch.zeros(ax_shape).normal_(0, 1))
+            self.weights.append(ax_emb)
+
+    def forward(self, x):
+        b, t, e = x.shape
+        embs = []
+
+        for ax_emb in self.weights:
+            expand_shape = (b, *self.shape, self.dim)
+            emb = ax_emb.expand(expand_shape).reshape(b, self.seq_len, self.dim)
+            embs.append(emb)
+
+        pos_emb = sum(embs)
+        return pos_emb[:, :t]
 
 # local attention
 
@@ -701,6 +733,7 @@ class SinkhornTransformerLM(nn.Module):
         self.max_seq_len = max_seq_len
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
+        self.axial_pos_emb = AxialPositionalEncoding(dim, max_seq_len, axial_shape = (buckets, max_seq_len // buckets))
         self.sinkhorn_transformer = SinkhornTransformer(dim, depth, max_seq_len = max_seq_len, causal = causal, heads = heads, buckets = buckets, kv_buckets = kv_buckets, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, layer_dropout = layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, use_simple_sort_net = use_simple_sort_net, receives_context = receives_context, context_buckets = context_buckets, context_n_sortcut = context_n_sortcut, n_local_attn_heads = n_local_attn_heads)
 
         if emb_dim != dim:
@@ -714,5 +747,6 @@ class SinkhornTransformerLM(nn.Module):
 
         x = self.to_token_emb(x)
         x = self.pos_emb(torch.arange(t, device=device)) + x
+        x = self.axial_pos_emb(x) + x
         x = self.sinkhorn_transformer(x, **kwargs)
         return self.to_logits(x)
