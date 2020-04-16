@@ -655,8 +655,9 @@ class SinkhornSelfAttention(nn.Module):
 
     def forward(self, x, input_mask = None, context = None, context_mask = None):
         b, t, d, h, l_h = *x.shape, self.heads, self.n_local_attn_heads
-        assert divisible_by(t, self.bucket_size), f'sequence {t} needs to be divisible by bucket size {self.buckets}'
+        assert divisible_by(t, self.bucket_size), f'sequence {t} needs to be divisible by bucket size {self.bucket_size}'
         assert not (self.context_only and context is None), 'context key / values must be supplied if context self attention layer'
+        assert not (context is not None and (context.shape[0], context.shape[2]) !=  (b, d)), 'contextual key / values must have the same batch and dimensions as the decoder'
 
         q = self.to_q(x)
 
@@ -728,8 +729,10 @@ class SinkhornTransformer(nn.Module):
         self.layers = execute_type(layers, args_route = {**context_route_map, **attn_route_map}, layer_dropout = layer_dropout)
         self.receives_context = receives_context
 
-        self.bucket_size = bucket_size
         self.max_seq_len = max_seq_len
+        self.bucket_size = bucket_size
+        self.context_bucket_size = context_bucket_size
+
         self.is_fixed_length = use_simple_sort_net and not causal
 
         # if not using attention sort and also not causal, force fixed sequence length
@@ -747,6 +750,7 @@ class SinkhornTransformerLM(nn.Module):
 
         self.max_seq_len = max_seq_len
         self.bucket_size = bucket_size
+        self.context_bucket_size = default(context_bucket_size, bucket_size)
 
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
