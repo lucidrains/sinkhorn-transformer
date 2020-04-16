@@ -35,8 +35,8 @@ s = SinkhornTransformerLM(
     dim = 1024,
     heads = 8,
     depth = 12,
-    buckets = 64,
     max_seq_len = 8192,
+    bucket_size = 128,        # size of the buckets
     causal = False,           # auto-regressive or not
     n_sortcut = 2,            # use sortcut to reduce memory complexity to linear
     ff_chunks = 10,           # feedforward chunking, from Reformer paper
@@ -65,7 +65,7 @@ s = SinkhornTransformer(
     dim = 1024,
     heads = 8,
     depth = 12,
-    buckets = 64
+    bucket_size = 128
 )
 
 x = torch.randn(1, 2048, 1024)
@@ -86,7 +86,7 @@ enc = SinkhornTransformerLM(
     dim = 512,
     depth = 6,
     heads = 8,
-    buckets = 32,
+    bucket_size = 128,
     max_seq_len = DE_SEQ_LEN,
     reversible = True,
     return_embeddings = True
@@ -97,7 +97,7 @@ dec = SinkhornTransformerLM(
     dim = 512,
     depth = 6,
     causal = True,
-    buckets = 32,
+    bucket_size = 128,
     max_seq_len = EN_SEQ_LEN,
     receives_context = True,
     reversible = True
@@ -113,6 +113,31 @@ context = enc(x, input_mask=x_mask)
 dec(y, context=context, input_mask=y_mask, context_mask=x_mask) # (1, 4096, 20000)
 ```
 
+## Autopadder
+
+By default the model will complain if given an input that is not a multiple of the bucket size. To avoid having to make the same padding calculations each time, you can use the helper `Autopadder` class. It will take care of the `input_mask` for you as well, if given. Contextual key/values and mask not supported yet (will be).
+
+```python
+import torch
+from sinkhorn_transformer import SinkhornTransformerLM
+from sinkhorn_transformer import Autopadder
+
+s = SinkhornTransformerLM(
+    num_tokens = 20000,
+    dim = 1024,
+    heads = 8,
+    depth = 12,
+    max_seq_len = 2048,
+    bucket_size = 128,
+    causal = True
+)
+
+s = Autopadder(s) # autopadder will fetch the bucket size and autopad input
+
+x = torch.randint(0, 20000, (1, 1117)) # odd sequence length
+s(x) # (1, 1117, 20000)
+```
+
 ## Sinkhorn
 
 This repository has diverged from the paper and is now using attention in place of the original sorting net + gumbel sinkhorn sampling. I have not found a noticeable difference in performance yet, and the new scheme allows me to generalize the network to flexible sequence lengths. If you would like to try Sinkhorn, please use the following settings, which only works for non-causal networks.
@@ -126,7 +151,7 @@ s = SinkhornTransformerLM(
     dim = 1024,
     heads = 8,
     depth = 12,
-    buckets = 64,
+    bucket_size = 128,
     max_seq_len = 8192,
     use_simple_sort_net = True, # turn off attention sort net
     sinkhorn_iter = 7,          # number of sinkhorn iterations - default is set at reported best in paper

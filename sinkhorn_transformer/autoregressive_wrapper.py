@@ -4,6 +4,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from sinkhorn_transformer.sinkhorn_transformer import SinkhornTransformerLM
+from sinkhorn_transformer.autopadder import Autopadder
 
 def top_p(logits, thres = 0.9):
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
@@ -30,7 +31,7 @@ class AutoregressiveWrapper(nn.Module):
         self.pad_value = pad_value
         self.ignore_index = ignore_index
 
-        self.net = net
+        self.net = Autopadder(net)
         self.max_seq_len = net.max_seq_len
 
     @torch.no_grad()

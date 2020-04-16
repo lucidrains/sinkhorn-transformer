@@ -2,7 +2,7 @@ import torch
 from sinkhorn_transformer.sinkhorn_transformer import SinkhornTransformerLM
 from sinkhorn_transformer.autoregressive_wrapper import AutoregressiveWrapper
 
-N_BATCH = 32
+N_BATCH = 16
 SRC_SEQ_LEN = 512
 TGT_SEQ_LEN = 512
 
@@ -12,9 +12,8 @@ enc = SinkhornTransformerLM(
     depth = 1,
     heads = 8,
     max_seq_len = SRC_SEQ_LEN,
-    buckets = 16,
-    return_embeddings = True,
-    non_permutative = True
+    bucket_size = 64,
+    return_embeddings = True
 ).cuda()
 
 dec = SinkhornTransformerLM(
@@ -23,10 +22,9 @@ dec = SinkhornTransformerLM(
     depth = 2,
     heads = 8,
     max_seq_len = TGT_SEQ_LEN,
-    buckets = 16,
+    bucket_size = 64,
     causal = True,
-    receives_context = True,
-    non_permutative = True
+    receives_context = True
 ).cuda()
 
 dec = AutoregressiveWrapper(dec, ignore_index = 0, pad_value = 0)

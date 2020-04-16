@@ -1,2 +1,3 @@
 from sinkhorn_transformer.sinkhorn_transformer import SinkhornTransformer, SinkhornTransformerLM, SinkhornSelfAttention
 from sinkhorn_transformer.autoregressive_wrapper import AutoregressiveWrapper
+from sinkhorn_transformer.autopadder import Autopadder
