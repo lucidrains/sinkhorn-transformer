@@ -42,7 +42,6 @@ s = SinkhornTransformerLM(
     n_sortcut = 2,            # use sortcut to reduce complexity to linear time
     temperature = 0.75,       # gumbel temperature - default is set at reported best in paper
     non_permutative = False,  # allow buckets of keys to be sorted to queries more than once
-    attn_sort_net = True,     # attention to reorder the buckets, unlocks flexible sequence lengths
     ff_chunks = 10,           # feedforward chunking, from Reformer paper
     reversible = True,        # make network reversible, from Reformer paper
     ff_dropout = 0.1,         # feedforward dropout

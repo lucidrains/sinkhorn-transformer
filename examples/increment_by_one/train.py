@@ -14,7 +14,6 @@ enc = SinkhornTransformerLM(
     max_seq_len = SRC_SEQ_LEN,
     buckets = 16,
     return_embeddings = True,
-    attn_sort_net = True,
     non_permutative = True
 ).cuda()
 
@@ -27,7 +26,6 @@ dec = SinkhornTransformerLM(
     buckets = 16,
     causal = True,
     receives_context = True,
-    attn_sort_net = True,
     non_permutative = True
 ).cuda()
 
