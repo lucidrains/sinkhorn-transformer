@@ -116,7 +116,7 @@ dec(y, context=context, input_mask=y_mask, context_mask=x_mask) # (1, 4096, 2000
 
 ## Autopadder
 
-By default the model will complain if given an input that is not a multiple of the bucket size. To avoid having to make the same padding calculations each time, you can use the helper `Autopadder` class. It will take care of the `input_mask` for you as well, if given. Contextual key/values and mask not supported yet (will be).
+By default the model will complain if given an input that is not a multiple of the bucket size. To avoid having to make the same padding calculations each time, you can use the helper `Autopadder` class. It will take care of the `input_mask` for you as well, if given. Contextual key/values and mask are supported as well.
 
 ```python
 import torch
