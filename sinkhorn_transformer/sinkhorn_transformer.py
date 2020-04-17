@@ -2,6 +2,7 @@ import math
 import torch
 from torch import nn
 from operator import mul
+from fractions import gcd
 import torch.nn.functional as F
 from inspect import isfunction
 from functools import partial, wraps, reduce
@@ -18,6 +19,9 @@ def default(x, d):
 
 def divisible_by(num, divisor):
     return num % divisor == 0
+
+def lcm(*numbers):
+    return int(reduce(lambda x, y: (x * y) / gcd(x, y), numbers, 1))
 
 def all_none(*arr):
     return all(el is None for el in arr)
@@ -691,7 +695,8 @@ class SinkhornSelfAttention(nn.Module):
 class SinkhornTransformer(nn.Module):
     def __init__(self, dim, depth, max_seq_len = None, causal = False, heads = 8, bucket_size = 64, kv_bucket_size = None, context_bucket_size = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., layer_dropout = 0., weight_tie = False, ff_glu = False, use_simple_sort_net = False, receives_context = False, context_n_sortcut = 2, n_local_attn_heads = 0):
         super().__init__()
-        layers = nn.ModuleList([])        
+        layers = nn.ModuleList([])
+        kv_bucket_size = default(kv_bucket_size, bucket_size)
         context_bucket_size = default(context_bucket_size, bucket_size)
 
         get_attn = lambda: SinkhornSelfAttention(dim, bucket_size, max_seq_len, causal = causal, heads = heads, kv_bucket_size = kv_bucket_size, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, use_simple_sort_net = use_simple_sort_net, n_local_attn_heads = n_local_attn_heads)
@@ -730,7 +735,7 @@ class SinkhornTransformer(nn.Module):
         self.receives_context = receives_context
 
         self.max_seq_len = max_seq_len
-        self.bucket_size = bucket_size
+        self.pad_to_bucket_size = lcm(bucket_size, kv_bucket_size)
         self.context_bucket_size = context_bucket_size
 
         self.is_fixed_length = use_simple_sort_net and not causal
@@ -747,10 +752,7 @@ class SinkhornTransformerLM(nn.Module):
     def __init__(self, num_tokens, dim, max_seq_len, depth, heads = 8, bucket_size = 64, kv_bucket_size = None, context_bucket_size = None, causal = False, non_permutative = True, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., layer_dropout = 0., weight_tie = False, emb_dim = None, use_simple_sort_net = False, receives_context = False, context_n_sortcut = 2, n_local_attn_heads = 0):
         super().__init__()
         emb_dim = default(emb_dim, dim)
-
         self.max_seq_len = max_seq_len
-        self.bucket_size = bucket_size
-        self.context_bucket_size = default(context_bucket_size, bucket_size)
 
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)

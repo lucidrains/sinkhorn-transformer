@@ -22,10 +22,13 @@ class Autopadder(nn.Module):
         assert isinstance(net, (SinkhornTransformer, SinkhornTransformerLM)), 'only modules SinkhornTransformer and SinkhornTransformerLM accepted'
         self.net = net
 
-        self.bucket_size = net.bucket_size
-        self.context_bucket_size = net.context_bucket_size
+        is_lm = isinstance(net, SinkhornTransformerLM)
+        sinkhorn = net.sinkhorn_transformer if is_lm else net
 
-        self.pad_dim = -1 if isinstance(net, SinkhornTransformerLM) else -2
+        self.bucket_size = sinkhorn.pad_to_bucket_size
+        self.context_bucket_size = sinkhorn.context_bucket_size
+
+        self.pad_dim = -1 if is_lm else -2
         self.pad_left = pad_left
 
     def forward(self, x, **kwargs):
