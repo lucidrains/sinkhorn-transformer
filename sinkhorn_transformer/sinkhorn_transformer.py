@@ -106,7 +106,7 @@ def max_neg_value(tensor):
     return -torch.finfo(tensor.dtype).max
 
 def cumavg(t, dim):
-    r = torch.arange(1, t.shape[dim] + 1, device=t.device)
+    r = torch.arange(1, t.shape[dim] + 1, device=t.device, dtype=t.dtype)
     expand_slice = [None] * len(t.shape)
     expand_slice[dim] = slice(None, None)
     return t.cumsum(dim=dim) / r[tuple(expand_slice)]
@@ -592,9 +592,15 @@ class SinkhornCausalAttention(nn.Module):
         if not all_none(q_mask, kv_mask):
             q_mask = default(q_mask, lambda: torch.ones((b, t), device=device).bool())
             kv_mask = default(kv_mask, q_mask)
+
+            expand_head = lambda x: x.unsqueeze(1).repeat(1, h, 1)
+            q_mask, kv_mask = map(expand_head, (q_mask, kv_mask))
+
+            q_mask[hh_slice] = rotate_left(q_mask[hh_slice], bsz-1, dim=2)
+            kv_mask[hh_slice] = rotate_left(kv_mask[hh_slice], bsz-1, dim=2)
+
+            q_mask, kv_mask = map(lambda x: merge_dims(0, 1, x), (q_mask, kv_mask))
             mq, mk = bucket(buckets, q_mask), bucket(buckets, kv_mask)
-            expand_head_and_merge_into_batch = lambda x: merge_dims(0, 1, expand_dim(x.unsqueeze(1), 1, h))
-            mq, mk = map(expand_head_and_merge_into_batch, (mq, mk))
 
             mk_with_null = F.pad(mk, (0, 0, 1, 0), value=True)
             mk_r = batched_index_select(mk_with_null, R.abs().argmax(dim=-1))
