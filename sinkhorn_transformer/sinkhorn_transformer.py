@@ -522,7 +522,7 @@ class CausalAttentionSortNet(nn.Module):
 class SinkhornCausalAttention(nn.Module):
     def __init__(self, bucket_size, dim, dim_heads, heads, max_seq_len, dropout = 0., kv_bucket_size = None, use_simple_sort_net = False):
         super().__init__()
-        assert kv_bucket_size is None, 'different bucketing for key/values for causal reordering not supported yet'
+        assert kv_bucket_size is None or bucket_size == kv_bucket_size, 'different bucketing for key/values for causal reordering not supported yet'
 
         self.dim = dim
         self.heads = heads
