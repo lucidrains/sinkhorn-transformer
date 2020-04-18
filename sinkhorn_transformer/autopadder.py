@@ -4,6 +4,12 @@ from torch import nn
 import torch.nn.functional as F
 from sinkhorn_transformer.sinkhorn_transformer import SinkhornTransformer, SinkhornTransformerLM
 
+def find_module(nn_module, type):
+    for module in nn_module.modules():
+        if isinstance(module, type):
+            return module
+    return None
+
 def pad_to_multiple(tensor, multiple, dim=-1, pad_left = False):
     seqlen = tensor.shape[dim]
     m = seqlen / multiple
@@ -23,8 +29,7 @@ class Autopadder(nn.Module):
         self.net = net
 
         is_lm = isinstance(net, SinkhornTransformerLM)
-        sinkhorn = net.sinkhorn_transformer if is_lm else net
-
+        sinkhorn = find_module(net, SinkhornTransformer)
         self.bucket_size = sinkhorn.pad_to_bucket_size
         self.context_bucket_size = sinkhorn.context_bucket_size
 
