@@ -1,5 +1,5 @@
 {
-  "train_micro_batch_size_per_gpu": 4,
+  "train_batch_size": 32,
   "gradient_accumulation_steps": 4,
   "steps_per_print": 2000,
   "max_grad_norm": 0.5,
