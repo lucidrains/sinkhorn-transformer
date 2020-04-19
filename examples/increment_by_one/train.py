@@ -36,10 +36,10 @@ pos = 3 * torch.ones(N_BATCH, 1).long()
 
 for i in range(10000):
     train_seq_in = torch.randint(4, 63, (N_BATCH, SRC_SEQ_LEN-2)).long()
-    train_seq_out = train_seq_in
+    train_seq_out = train_seq_in + 1
 
     x = torch.cat([bos, train_seq_in, eos], dim=1).cuda()
-    y = torch.cat([bos, train_seq_out, eos, eos], dim=1).cuda()
+    y = torch.cat([bos, train_seq_out, eos], dim=1).cuda()
 
     context = enc(x)
     loss = dec(y, context = context, return_loss = True)

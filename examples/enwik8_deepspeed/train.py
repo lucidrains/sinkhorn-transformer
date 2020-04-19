@@ -33,10 +33,6 @@ def add_argument():
 
 # constants
 
-NUM_BATCHES = int(1e5)
-BATCH_SIZE = 4
-GRADIENT_ACCUMULATE_EVERY = 4
-LEARNING_RATE = 1e-4
 VALIDATE_EVERY  = 100
 GENERATE_EVERY  = 500
 GENERATE_LENGTH = 1024
@@ -107,7 +103,7 @@ for i, data in enumerate(trainloader):
     loss = model_engine(data, return_loss = True)
     model_engine.backward(loss)
     model_engine.step()
-    print(loss.item())
+    print(loss.item() * 4)
 
     if i % VALIDATE_EVERY == 0:
         model.eval()
