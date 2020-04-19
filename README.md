@@ -30,7 +30,7 @@ A Sinkhorn Transformer based language model
 import torch
 from sinkhorn_transformer import SinkhornTransformerLM
 
-s = SinkhornTransformerLM(
+model = SinkhornTransformerLM(
     num_tokens = 20000,
     dim = 1024,
     heads = 8,
@@ -52,7 +52,7 @@ s = SinkhornTransformerLM(
 )
 
 x = torch.randint(0, 20000, (1, 2048))
-s(x) # (1, 2048, 20000)
+model(x) # (1, 2048, 20000)
 ```
 
 A plain Sinkhorn Transformer, layers of sinkhorn attention
@@ -61,7 +61,7 @@ A plain Sinkhorn Transformer, layers of sinkhorn attention
 import torch
 from sinkhorn_transformer import SinkhornTransformer
 
-s = SinkhornTransformer(
+model = SinkhornTransformer(
     dim = 1024,
     heads = 8,
     depth = 12,
@@ -69,7 +69,7 @@ s = SinkhornTransformer(
 )
 
 x = torch.randn(1, 2048, 1024)
-s(x) # (1, 2048, 1024)
+model(x) # (1, 2048, 1024)
 ```
 
 Sinkhorn Encoder / Decoder Transformer
@@ -123,7 +123,7 @@ import torch
 from sinkhorn_transformer import SinkhornTransformerLM
 from sinkhorn_transformer import Autopadder
 
-s = SinkhornTransformerLM(
+model = SinkhornTransformerLM(
     num_tokens = 20000,
     dim = 1024,
     heads = 8,
@@ -133,10 +133,10 @@ s = SinkhornTransformerLM(
     causal = True
 )
 
-s = Autopadder(s, pad_left=True) # autopadder will fetch the bucket size and autopad input
+model = Autopadder(model, pad_left=True) # autopadder will fetch the bucket size and autopad input
 
 x = torch.randint(0, 20000, (1, 1117)) # odd sequence length
-s(x) # (1, 1117, 20000)
+model(x) # (1, 1117, 20000)
 ```
 
 ## Sinkhorn
@@ -147,7 +147,7 @@ This repository has diverged from the paper and is now using attention in place 
 import torch
 from sinkhorn_transformer import SinkhornTransformerLM
 
-s = SinkhornTransformerLM(
+model = SinkhornTransformerLM(
     num_tokens = 20000,
     dim = 1024,
     heads = 8,
@@ -161,8 +161,8 @@ s = SinkhornTransformerLM(
     non_permutative = False,    # allow buckets of keys to be sorted to queries more than once
 )
 
-x = torch.randint(0, 20000, (1, 8192))
-s(x) # (1, 8192, 20000)
+model = torch.randint(0, 20000, (1, 8192))
+model(x) # (1, 8192, 20000)
 ```
 
 ## Citations
