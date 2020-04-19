@@ -266,7 +266,7 @@ class LocalAttention(nn.Module):
         bq_t = b_t
         bq_k = look_around(b_t, **look_around_kwargs)
 
-        dots = torch.einsum('bhie,bhje->bhij', bq, bk)
+        dots = torch.einsum('bhie,bhje->bhij', bq, bk) * (e ** -0.5)
         mask_value = max_neg_value(dots)
 
         if causal:
@@ -346,7 +346,7 @@ class AttentionSortNet(nn.Module):
         sq = b_q.mean(dim=2)
         sk = b_k.mean(dim=2)
 
-        R = torch.einsum('bie,bje->bij', sq, sk).to(q)
+        R = torch.einsum('bie,bje->bij', sq, sk).to(q) * (dim ** -0.5)
 
         if self.n_sortcut > 0:
             values, indices = torch.topk(R, self.n_sortcut)
@@ -418,7 +418,7 @@ class SinkhornAttention(nn.Module):
         b_k = torch.cat((b_k_r, b_k), dim=2) if buckets == kv_buckets else b_k_r
         b_v = torch.cat((b_v_r, b_v), dim=2) if buckets == kv_buckets else b_v_r
 
-        dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d ** -0.5)
+        dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d_h ** -0.5)
 
         # mask 
         mask_value = max_neg_value(dots)
@@ -516,7 +516,7 @@ class CausalAttentionSortNet(nn.Module):
         sk = k_r.sum(dim=2)
         sk = F.pad(sk, (0, 0, 1, 0))
 
-        R = torch.einsum('bie,bje->bij', sq, sk)
+        R = torch.einsum('bie,bje->bij', sq, sk) * (dim ** -0.5)
         return mask_reordering_matrix(R)
 
 class SinkhornCausalAttention(nn.Module):
@@ -533,7 +533,6 @@ class SinkhornCausalAttention(nn.Module):
         self.null_values = nn.Parameter(torch.randn(heads, 1, dim_heads))
 
         if use_simple_sort_net:
-
             self.sort_net = CausalSimpleSortNet(heads, bucket_size, max_seq_len // bucket_size, dim_heads * 2)
         else:
             self.sort_net = CausalAttentionSortNet(heads, bucket_size, dim_heads)
@@ -584,7 +583,7 @@ class SinkhornCausalAttention(nn.Module):
         b_k = torch.cat((b_k_r, b_k), dim=2)
         b_v = torch.cat((b_v_r, b_v), dim=2)
 
-        dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d ** -0.5)
+        dots = torch.einsum('buie,buje->buij', b_q, b_k) * (d_h ** -0.5)
 
         # mask
         mask_value = max_neg_value(q)
