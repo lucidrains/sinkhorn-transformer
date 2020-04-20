@@ -179,6 +179,15 @@ class FeedForward(nn.Module):
         x = self.w2(x)
         return x
 
+class ReZero(nn.Module):
+    def __init__(self, fn):
+        super().__init__()
+        self.g = nn.Parameter(torch.zeros(1))
+        self.fn = fn
+
+    def forward(self, x, **kwargs):
+        return self.fn(x, **kwargs) * self.g
+
 class PreNorm(nn.Module):
     def __init__(self, norm_class, dim, fn):
         super().__init__()
@@ -698,7 +707,7 @@ class SinkhornSelfAttention(nn.Module):
         return out
 
 class SinkhornTransformer(nn.Module):
-    def __init__(self, dim, depth, max_seq_len = None, causal = False, heads = 8, bucket_size = 64, kv_bucket_size = None, context_bucket_size = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., layer_dropout = 0., weight_tie = False, ff_glu = False, use_simple_sort_net = None, receives_context = False, context_n_sortcut = 2, n_local_attn_heads = 0):
+    def __init__(self, dim, depth, max_seq_len = None, causal = False, heads = 8, bucket_size = 64, kv_bucket_size = None, context_bucket_size = None, non_permutative = False, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., layer_dropout = 0., weight_tie = False, ff_glu = False, use_simple_sort_net = None, receives_context = False, context_n_sortcut = 2, n_local_attn_heads = 0, use_rezero = False):
         super().__init__()
         layers = nn.ModuleList([])
 
@@ -708,7 +717,7 @@ class SinkhornTransformer(nn.Module):
         context_bucket_size = default(context_bucket_size, bucket_size)
 
         get_attn = lambda: SinkhornSelfAttention(dim, bucket_size, max_seq_len, causal = causal, heads = heads, kv_bucket_size = kv_bucket_size, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, use_simple_sort_net = use_simple_sort_net, n_local_attn_heads = n_local_attn_heads)
-        get_ff = lambda: FeedForward(dim, dropout = ff_dropout, glu = ff_glu)
+        get_ff = lambda: Chunk(ff_chunks, FeedForward(dim, dropout = ff_dropout, glu = ff_glu), along_dim=1)
 
         get_attn_context = lambda: SinkhornSelfAttention(dim, bucket_size, max_seq_len, context_only = True, heads = heads, kv_bucket_size = context_bucket_size, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = context_n_sortcut, temperature = temperature, attn_dropout = attn_dropout, dropout = attn_layer_dropout, use_simple_sort_net = use_simple_sort_net)
         get_ff_context = lambda: FeedForward(dim, dropout = ff_dropout, glu = ff_glu)
@@ -716,18 +725,20 @@ class SinkhornTransformer(nn.Module):
         if weight_tie:
             get_attn, get_attn_context, get_ff, get_ff_context = map(cache_fn, (get_attn, get_attn_context, get_ff, get_ff_context))
 
+        fn_wrapper = partial(PreNorm, nn.LayerNorm, dim) if not use_rezero else ReZero
+
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                PreNorm(nn.LayerNorm, dim, get_attn()),
-                PreNorm(nn.LayerNorm, dim, Chunk(ff_chunks, get_ff(), along_dim=1))
+                fn_wrapper(get_attn()),
+                fn_wrapper(get_ff())
             ]))
 
             if not receives_context:
                 continue
 
             layers.append(nn.ModuleList([
-                PreNorm(nn.LayerNorm, dim, get_attn_context()),
-                PreNorm(nn.LayerNorm, dim, Chunk(ff_chunks, get_ff_context(), along_dim=1))
+                fn_wrapper(get_attn_context()),
+                fn_wrapper(get_ff_context())
             ]))
 
         execute_type = ReversibleSequence if reversible else SequentialSequence
@@ -757,7 +768,7 @@ class SinkhornTransformer(nn.Module):
         return self.layers(x, **kwargs)
 
 class SinkhornTransformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, max_seq_len, depth, heads = 8, bucket_size = 64, kv_bucket_size = None, context_bucket_size = None, causal = False, non_permutative = True, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., layer_dropout = 0., weight_tie = False, emb_dim = None, use_simple_sort_net = None, receives_context = False, context_n_sortcut = 2, n_local_attn_heads = 0):
+    def __init__(self, num_tokens, dim, max_seq_len, depth, heads = 8, bucket_size = 64, kv_bucket_size = None, context_bucket_size = None, causal = False, non_permutative = True, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, reversible = False, ff_chunks = 1, ff_glu = False, return_embeddings = False, ff_dropout = 0., attn_dropout = 0., attn_layer_dropout = 0., layer_dropout = 0., weight_tie = False, emb_dim = None, use_simple_sort_net = None, receives_context = False, context_n_sortcut = 2, n_local_attn_heads = 0, use_rezero = False):
         super().__init__()
         emb_dim = default(emb_dim, dim)
         self.max_seq_len = max_seq_len
@@ -765,7 +776,7 @@ class SinkhornTransformerLM(nn.Module):
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
         self.axial_pos_emb = AxialPositionalEncoding(emb_dim, max_seq_len, axial_shape = (max_seq_len // bucket_size, bucket_size))
-        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, max_seq_len = max_seq_len, causal = causal, heads = heads, bucket_size = bucket_size, kv_bucket_size = kv_bucket_size, context_bucket_size = context_bucket_size, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, layer_dropout = layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, use_simple_sort_net = use_simple_sort_net, receives_context = receives_context, context_n_sortcut = context_n_sortcut, n_local_attn_heads = n_local_attn_heads)
+        self.sinkhorn_transformer = SinkhornTransformer(dim, depth, max_seq_len = max_seq_len, causal = causal, heads = heads, bucket_size = bucket_size, kv_bucket_size = kv_bucket_size, context_bucket_size = context_bucket_size, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, layer_dropout = layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, use_simple_sort_net = use_simple_sort_net, receives_context = receives_context, context_n_sortcut = context_n_sortcut, n_local_attn_heads = n_local_attn_heads, use_rezero = use_rezero)
 
         if emb_dim != dim:
             self.sinkhorn_transformer = ProjectInOut(self.sinkhorn_transformer, emb_dim, dim, project_out =(not return_embeddings))
