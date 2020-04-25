@@ -54,7 +54,6 @@ class AutoregressiveWrapper(nn.Module):
         for _ in range(seq_len):
             x = out[:, -self.max_seq_len:]
             input_mask = input_mask[:, -self.max_seq_len:]
-
             logits = self.net(x, input_mask=input_mask, **kwargs)[:, -1, :]
             filtered_logits = filter_logits_fn(logits, thres = filter_thres)
             probs = F.softmax(filtered_logits / temperature, dim=-1)
@@ -83,11 +82,16 @@ class AutoregressiveWrapper(nn.Module):
             return self.net(x, **kwargs)
 
         if isinstance(x, torch.Tensor):
-            xi = x[:, :-1]
-            xo = x[:, 1:]
+            xi, xo = x[:, :-1], x[:, 1:]
         else:
             xi = pad(list(map(lambda t: t[:-1], x)))
             xo = pad(list(map(lambda t: t[1:], x)))
+
+        m = kwargs.pop('input_mask')
+
+        if m is not None:
+            assert m.shape == x.shape[0:2], 'input mask must be the same shape as the input of the auto-regressive wrapper to automatically handle'
+            kwargs.update(input_mask = m[:, :-1])
 
         out = self.net(xi, **kwargs)
 
