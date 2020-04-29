@@ -87,7 +87,7 @@ class AutoregressiveWrapper(nn.Module):
             xi = pad(list(map(lambda t: t[:-1], x)))
             xo = pad(list(map(lambda t: t[1:], x)))
 
-        m = kwargs.pop('input_mask')
+        m = kwargs.pop('input_mask', None)
 
         if m is not None:
             assert m.shape == x.shape[0:2], 'input mask must be the same shape as the input of the auto-regressive wrapper to automatically handle'
