@@ -392,7 +392,7 @@ class SinkhornAttention(nn.Module):
         buckets = q.shape[2] // bucket_size
         kv_buckets = k.shape[2] // kv_bucket_size
 
-        merge_batch_head = lambda x: x.reshape(b * h, t, d_h)
+        merge_batch_head = partial(merge_dims, 0, 1)
         q, k, v = map(merge_batch_head, (q, k, v))
 
         # bucket query, key, values
