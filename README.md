@@ -49,6 +49,7 @@ model = SinkhornTransformerLM(
     emb_dim = 128,            # embedding factorization, from Albert paper
     ff_glu = True,            # use GLU in feedforward, from paper 'GLU Variants Improve Transformer'
     n_local_attn_heads = 2,   # replace N heads with local attention, suggested to work well from Routing Transformer paper
+    num_sort_heads = 2,       # multiple sorting heads, to look at more than one bucket
 )
 
 x = torch.randint(0, 20000, (1, 2048))
