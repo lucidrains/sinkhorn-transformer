@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'sinkhorn_transformer',
   packages = find_packages(exclude=['examples']),
-  version = '0.6.4',
+  version = '0.6.5',
   license='MIT',
   description = 'Sinkhorn Transformer - Sparse Sinkhorn Attention',
   author = 'Phil Wang',

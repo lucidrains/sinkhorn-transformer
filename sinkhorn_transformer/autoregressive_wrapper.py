@@ -1,10 +1,14 @@
 from functools import partial
 import torch
+from random import randint
 from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from sinkhorn_transformer.sinkhorn_transformer import SinkhornTransformerLM
 from sinkhorn_transformer.autopadder import Autopadder
+
+def default(value, default):
+    return value if value is not None else default
 
 def top_p(logits, thres = 0.9):
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
@@ -24,12 +28,25 @@ def top_k(logits, thres = 0.9):
     probs.scatter_(1, ind, val)
     return probs
 
+def pad_sequence_left(seqs, value):
+    m = max([len(s) for s in seqs])
+    return torch.stack([F.pad(s, (m - len(s), 0)) for s in seqs])
+
+def random_truncate_inputs(inputs, mask = None, pad_value=0):
+    b, t, device, dtype = *inputs.shape, inputs.device, inputs.dtype
+    mask = default(mask, torch.ones_like(inputs))
+    rand_lengths = torch.randint(2, t, (b, 1))
+    rand_mask = (torch.arange(t) < rand_lengths).to(device)
+    target_seqs = [t.masked_select(mask) for mask, t in zip(rand_mask, inputs)]
+    mask_seqs = [m.masked_select(mask) for mask, m in zip(rand_mask, rand_mask)]
+    return pad_sequence_left(target_seqs, pad_value), pad_sequence_left(mask_seqs, False)
+
 class AutoregressiveWrapper(nn.Module):
-    def __init__(self, net, ignore_index = -100, pad_value = 0, pad_left = True):
+    def __init__(self, net, ignore_index = None, pad_value = 0, pad_left = True):
         super().__init__()
         assert isinstance(net, SinkhornTransformerLM), 'generative trainer wrapper can only accept SinkhornTransformerLM class'
         self.pad_value = pad_value
-        self.ignore_index = ignore_index
+        self.ignore_index = default(ignore_index, pad_value)
 
         self.net = Autopadder(net, pad_left = pad_left)
         self.max_seq_len = net.max_seq_len
@@ -61,7 +78,6 @@ class AutoregressiveWrapper(nn.Module):
 
             out = torch.cat((out, sample), dim=-1)
             input_mask = F.pad(input_mask, (0, 1), value=True)
-
             if eos_token is not None and (sample == eos_token).all():
                 break
 
@@ -73,7 +89,7 @@ class AutoregressiveWrapper(nn.Module):
         self.net.train(was_training)
         return out
 
-    def forward(self, x, return_loss = False, **kwargs):
+    def forward(self, x, return_loss = False, randomize_lengths = False, **kwargs):
         pad = partial(pad_sequence, batch_first = True, padding_value = self.pad_value)
 
         if not return_loss:
@@ -81,13 +97,16 @@ class AutoregressiveWrapper(nn.Module):
                 x = pad(x)
             return self.net(x, **kwargs)
 
+        m = kwargs.pop('input_mask', None)
+
+        if randomize_lengths:
+            x, m = random_truncate_inputs(x, m, pad_value = self.pad_value)
+
         if isinstance(x, torch.Tensor):
             xi, xo = x[:, :-1], x[:, 1:]
         else:
             xi = pad(list(map(lambda t: t[:-1], x)))
             xo = pad(list(map(lambda t: t[1:], x)))
-
-        m = kwargs.pop('input_mask', None)
 
         if m is not None:
             assert m.shape == x.shape[0:2], 'input mask must be the same shape as the input of the auto-regressive wrapper to automatically handle'
