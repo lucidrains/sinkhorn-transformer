@@ -241,7 +241,7 @@ class AxialPositionalEncoding(nn.Module):
             embs.append(emb)
 
         pos_emb = sum(embs)
-        return pos_emb[:, :t]
+        return pos_emb[:, :t].to(x)
 
 # a mock parameter list object until below issue is resolved
 # https://github.com/pytorch/pytorch/issues/36035
