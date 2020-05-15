@@ -89,7 +89,7 @@ class AutoregressiveWrapper(nn.Module):
         self.net.train(was_training)
         return out
 
-    def forward(self, x, return_loss = False, randomize_lengths = False, **kwargs):
+    def forward(self, x, return_loss = False, randomly_truncate_sequence = False, **kwargs):
         pad = partial(pad_sequence, batch_first = True, padding_value = self.pad_value)
 
         if not return_loss:
@@ -99,7 +99,7 @@ class AutoregressiveWrapper(nn.Module):
 
         m = kwargs.pop('input_mask', None)
 
-        if randomize_lengths:
+        if randomly_truncate_sequence:
             x, m = random_truncate_inputs(x, m, pad_value = self.pad_value)
 
         if isinstance(x, torch.Tensor):

@@ -162,9 +162,38 @@ model = SinkhornTransformerLM(
     non_permutative = False,    # allow buckets of keys to be sorted to queries more than once
 )
 
-model = torch.randint(0, 20000, (1, 8192))
+x = torch.randint(0, 20000, (1, 8192))
 model(x) # (1, 8192, 20000)
 ```
+
+## Ongoing Issues
+
+Sinkhorn, when trained on fixed length sequences, seems to have trouble decoding sequences from scratch, mainly due to the fact that the sorting net has trouble generalizing when the buckets are partially filled with padding tokens.
+
+Fortunately, I think I have found a simple solution. During training, for causal networks, randomly truncate the sequences and force the sorting net to generalize. I have provided a flag (`randomly_truncate_sequence`) for the `AutoregressiveWrapper` instance to make this easy.
+
+
+```python
+import torch
+from sinkhorn_transformer import SinkhornTransformerLM, AutoregressiveWrapper
+
+model = SinkhornTransformerLM(
+    num_tokens = 20000,
+    dim = 1024,
+    heads = 8,
+    depth = 12,
+    bucket_size = 75,
+    max_seq_len = 8192,
+    causal = True
+)
+
+model = AutoregressiveWrapper(model)
+
+x = torch.randint(0, 20000, (1, 8192))
+loss = model(x, return_loss = True, randomly_truncate_sequence = True) # (1, 8192, 20000)
+```
+
+I am open to suggestions if someone has found a better solution, but this suffices for me personally.
 
 ## Citations
 
