@@ -589,6 +589,7 @@ class SinkhornCausalAttention(nn.Module):
         bh = b * h
         hh = h // 2
         buckets = t // bsz
+        n_top = min(n_top, buckets)
 
         hh_slice = (slice(None), slice(hh, None))
 
