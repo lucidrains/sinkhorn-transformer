@@ -749,8 +749,6 @@ class SinkhornTransformer(nn.Module):
         super().__init__()
         layers = nn.ModuleList([])
 
-        use_simple_sort_net = default(use_simple_sort_net, causal)
-
         kv_bucket_size = default(kv_bucket_size, bucket_size)
         context_bucket_size = default(context_bucket_size, bucket_size)
 
