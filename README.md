@@ -39,6 +39,7 @@ model = SinkhornTransformerLM(
     bucket_size = 128,        # size of the buckets
     causal = False,           # auto-regressive or not
     n_sortcut = 2,            # use sortcut to reduce memory complexity to linear
+    n_top_buckets = 2,        # sort specified number of key/value buckets to one query bucket. paper is at 1, defaults to 2
     ff_chunks = 10,           # feedforward chunking, from Reformer paper
     reversible = True,        # make network reversible, from Reformer paper
     ff_dropout = 0.1,         # feedforward dropout
@@ -48,8 +49,7 @@ model = SinkhornTransformerLM(
     weight_tie = True,        # tie layer parameters, from Albert paper
     emb_dim = 128,            # embedding factorization, from Albert paper
     ff_glu = True,            # use GLU in feedforward, from paper 'GLU Variants Improve Transformer'
-    n_local_attn_heads = 2,   # replace N heads with local attention, suggested to work well from Routing Transformer paper
-    n_top_buckets = 2         # sort specified number of key/value buckets to one query bucket. paper is at 1, defaults to 2
+    n_local_attn_heads = 2    # replace N heads with local attention, suggested to work well from Routing Transformer paper
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -166,7 +166,9 @@ x = torch.randint(0, 20000, (1, 8192))
 model(x) # (1, 8192, 20000)
 ```
 
-## Ongoing Issues
+## Issues
+
+### Decoding and sequence lengths
 
 Sinkhorn, when trained on fixed length sequences, seems to have trouble decoding sequences from scratch, mainly due to the fact that the sorting net has trouble generalizing when the buckets are partially filled with padding tokens.
 
@@ -193,7 +195,15 @@ x = torch.randint(0, 20000, (1, 8192))
 loss = model(x, return_loss = True, randomly_truncate_sequence = True) # (1, 8192, 20000)
 ```
 
-I am open to suggestions if someone has found a better solution, but this suffices for me personally.
+I am open to suggestions if someone has found a better solution.
+
+### Causal sorting net
+
+There is a potential problem with the causal sorting network, where the decision of which key/value buckets of the past sorts to a bucket is dependent only on the first token and not the rest (due to the bucketing scheme and preventing leakage of future to past).
+
+I have attempted to alleviate this problem by rotating half the heads to the left by bucket size - 1, thereby promoting the last token to be first. This is also the reason why the `AutoregressiveWrapper` defaults to left padding during training, to always make sure that the last token in the sequence have a say in what to retrieve.
+
+If anyone has found a cleaner solution, please let me know in the issues.
 
 ## Citations
 

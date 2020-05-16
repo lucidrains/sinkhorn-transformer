@@ -141,10 +141,6 @@ def differentiable_topk(x, k, temperature=0.75):
     topks = torch.cat(topk_tensors, dim=-1)
     return topks.reshape(*_, k * n, dim)
 
-def zero_all_but_top(x, dim, k=1):
-    values, indices = torch.topk(x, k, dim=dim)
-    return torch.zeros_like(x).scatter_(dim, indices, values)
-
 def look_around(x, backward = 1, forward = 0, pad_value = -1, dim=2):
     t = x.shape[1]
     dims = (len(x.shape) - dim) * (0, 0)
@@ -453,8 +449,8 @@ class SinkhornAttention(nn.Module):
         # choose the top n ranked buckets for all query buckets
 
         if self.n_sortcut > 0:
-            b_k_r = b_k_r[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut, d_h)
-            b_v_r = b_v_r[:, 0:self.n_sortcut].reshape(-1, 1, bsz * self.n_sortcut, d_h)
+            b_k_r = b_k_r[:, 0:self.n_sortcut].reshape(bh, 1, -1, d_h)
+            b_v_r = b_v_r[:, 0:self.n_sortcut].reshape(bh, 1, -1, d_h)
             b_k_r = expand_dim(b_k_r, 1, buckets)
             b_v_r = expand_dim(b_v_r, 1, buckets)
         else:
@@ -612,13 +608,13 @@ class SinkhornCausalAttention(nn.Module):
         R = R.type_as(q).to(q)
 
         # add null key / values
-        b_null_k = self.null_keys[None, :, None, :, :].expand(b, h, n_top, bsz, -1).reshape(bh, n_top, bsz, -1)
-        b_null_v = self.null_values[None, :, None, :, :].expand(b, h, n_top, bsz, -1).reshape(bh, n_top, bsz, -1)
+        b_null_k = self.null_keys[None, :, None, :, :].expand(b, h, n_top, bsz, -1).reshape(bh, n_top, bsz, -1).to(k)
+        b_null_v = self.null_values[None, :, None, :, :].expand(b, h, n_top, bsz, -1).reshape(bh, n_top, bsz, -1).to(v)
 
         b_k_r = torch.cat((b_null_k, b_k), dim=1)
         b_v_r = torch.cat((b_null_v, b_v), dim=1)
 
-        # reorder buckets to buckets of the past        
+        # reorder buckets to buckets of the past
         b_k_r = reorder_buckets(b_k_r, R)
         b_v_r = reorder_buckets(b_v_r, R)
 
