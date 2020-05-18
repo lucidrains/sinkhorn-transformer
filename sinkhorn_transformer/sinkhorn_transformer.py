@@ -562,6 +562,10 @@ class CausalAttentionSortNet(nn.Module):
         R = torch.einsum('bie,bje->bij', sq, sk) * (dim ** -0.5)
         return mask_reordering_matrix(R, topk, self.temperature)
 
+def rotate_after_split_ind(dim, ind, fn, t):
+    l, r = split_at_index(dim, ind, t)
+    return torch.cat((l, fn(r)), dim=dim)
+
 class SinkhornCausalAttention(nn.Module):
     def __init__(self, bucket_size, dim, dim_heads, heads, max_seq_len, dropout = 0., kv_bucket_size = None, use_simple_sort_net = False, n_top_buckets = 2, temperature = 1.):
         super().__init__()
@@ -593,9 +597,8 @@ class SinkhornCausalAttention(nn.Module):
 
         hh_slice = (slice(None), slice(hh, None))
 
-        q[hh_slice] = rotate_left(q[hh_slice], bsz-1, dim=2)
-        k[hh_slice] = rotate_left(k[hh_slice], bsz-1, dim=2)
-        v[hh_slice] = rotate_left(v[hh_slice], bsz-1, dim=2)
+        rotate_fn = partial(rotate_after_split_ind, 1, hh, lambda t: rotate_left(t, bsz-1, dim=2))
+        q, k, v = map(rotate_fn, (q, k, v))
 
         # merge batch and head
         merge_batch_head = partial(merge_dims, 0, 1)
@@ -675,7 +678,7 @@ class SinkhornCausalAttention(nn.Module):
         out = unbucket(out)
 
         out = out.reshape(b, h, t, d_h)
-        out[hh_slice] = rotate_right(out[hh_slice], bsz-1, dim=2)
+        out = rotate_after_split_ind(1, hh, lambda t: rotate_right(t, bsz-1, dim=2), out)
         return out
 
 class SinkhornSelfAttention(nn.Module):
