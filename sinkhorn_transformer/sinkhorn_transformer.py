@@ -562,7 +562,7 @@ class CausalAttentionSortNet(nn.Module):
         R = torch.einsum('bie,bje->bij', sq, sk) * (dim ** -0.5)
         return mask_reordering_matrix(R, topk, self.temperature)
 
-def rotate_after_split_ind(dim, ind, fn, t):
+def apply_fn_after_split_ind(dim, ind, fn, t):
     l, r = split_at_index(dim, ind, t)
     return torch.cat((l, fn(r)), dim=dim)
 
@@ -597,7 +597,7 @@ class SinkhornCausalAttention(nn.Module):
 
         hh_slice = (slice(None), slice(hh, None))
 
-        rotate_fn = partial(rotate_after_split_ind, 1, hh, lambda t: rotate_left(t, bsz-1, dim=2))
+        rotate_fn = partial(apply_fn_after_split_ind, 1, hh, lambda t: rotate_left(t, bsz-1, dim=2))
         q, k, v = map(rotate_fn, (q, k, v))
 
         # merge batch and head
@@ -678,7 +678,7 @@ class SinkhornCausalAttention(nn.Module):
         out = unbucket(out)
 
         out = out.reshape(b, h, t, d_h)
-        out = rotate_after_split_ind(1, hh, lambda t: rotate_right(t, bsz-1, dim=2), out)
+        out = apply_fn_after_split_ind(1, hh, lambda t: rotate_right(t, bsz-1, dim=2), out)
         return out
 
 class SinkhornSelfAttention(nn.Module):
