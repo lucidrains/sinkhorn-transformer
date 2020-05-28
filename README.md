@@ -205,6 +205,11 @@ I have attempted to alleviate this problem by rotating half the heads to the lef
 
 If anyone has found a cleaner solution, please let me know in the issues.
 
+## Alternatives
+
+1. Routing Transformer - https://github.com/lucidrains/routing-transformer
+2. Reformer - https://github.com/lucidrains/reformer-pytorch
+
 ## Citations
 
 ```bibtex
