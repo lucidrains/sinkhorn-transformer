@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'sinkhorn_transformer',
   packages = find_packages(exclude=['examples']),
-  version = '0.7.7',
+  version = '0.8.0',
   license='MIT',
   description = 'Sinkhorn Transformer - Sparse Sinkhorn Attention',
   author = 'Phil Wang',
@@ -11,7 +11,8 @@ setup(
   url = 'https://github.com/lucidrains/sinkhorn-transformer',
   keywords = ['transformers', 'attention', 'artificial intelligence'],
   install_requires=[
-      'torch'
+      'torch',
+      'product-key-memory'
   ],
   classifiers=[
       'Development Status :: 4 - Beta',

@@ -49,7 +49,9 @@ model = SinkhornTransformerLM(
     weight_tie = True,        # tie layer parameters, from Albert paper
     emb_dim = 128,            # embedding factorization, from Albert paper
     ff_glu = True,            # use GLU in feedforward, from paper 'GLU Variants Improve Transformer'
-    n_local_attn_heads = 2    # replace N heads with local attention, suggested to work well from Routing Transformer paper
+    n_local_attn_heads = 2,   # replace N heads with local attention, suggested to work well from Routing Transformer paper
+    pkm_layers = (4,7),       # specify layers to use product key memory. paper shows 1 or 2 modules near the middle of the transformer is best
+    pkm_num_keys = 128,       # defaults to 128, but can be increased to 256 or 512 as memory allows
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -166,6 +168,12 @@ x = torch.randint(0, 20000, (1, 8192))
 model(x) # (1, 8192, 20000)
 ```
 
+## Product Key Memory
+
+To see the benefits of using PKM, the learning rate of the values must be set higher than the rest of the parameters. (Recommended to be `1e-2`)
+
+You can follow the instructions here to set it correctly https://github.com/lucidrains/product-key-memory#learning-rates
+
 ## Issues
 
 ### Decoding and sequence lengths
@@ -265,6 +273,16 @@ If anyone has found a cleaner solution, please let me know in the issues.
     booktitle ={International Conference on Learning Representations},
     year      ={2020},
     url       ={https://openreview.net/forum?id=SylO2yStDr}
+}
+```
+
+```bibtex
+@misc{lample2019large,
+    title   = {Large Memory Layers with Product Keys},
+    author  = {Guillaume Lample and Alexandre Sablayrolles and Marc'Aurelio Ranzato and Ludovic Denoyer and Hervé Jégou},
+    year    = {2019},
+    eprint  = {1907.05242},
+    archivePrefix = {arXiv}
 }
 ```
 
