@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from inspect import isfunction
 from functools import partial, wraps, reduce
 
+from axial_positional_embedding import AxialPositionalEmbedding
 from product_key_memory import PKM
 from sinkhorn_transformer.reversible import ReversibleSequence, SequentialSequence
 
@@ -226,57 +227,6 @@ class ProjectInOut(nn.Module):
         x = self.fn(x, **kwargs)
         x = self.project_out(x)
         return x
-
-# positional embeddings
-
-class AxialPositionalEncoding(nn.Module):
-    def __init__(self, dim, max_seq_len, axial_shape = ()):
-        super().__init__()
-        assert reduce(mul, axial_shape, 1) == max_seq_len, 'axial position shape must multiply up to max sequence length'
-
-        self.dim = dim
-        self.seq_len = max_seq_len
-        self.shape = axial_shape
-
-        self.weights = ParameterList(self, 'weights', len(axial_shape))
-
-        for ind, shape in enumerate(self.shape):
-            ax_shape = [1] * len(self.shape)
-            ax_shape[ind] = shape
-            ax_shape = (1, *ax_shape, dim)
-            ax_emb = nn.Parameter(torch.zeros(ax_shape).normal_(0, 1))
-            self.weights.append(ax_emb)
-
-    def forward(self, x):
-        b, t, e = x.shape
-        embs = []
-
-        for ax_emb in self.weights.to_list():
-            expand_shape = (b, *self.shape, self.dim)
-            emb = ax_emb.expand(expand_shape).reshape(b, self.seq_len, self.dim)
-            embs.append(emb)
-
-        pos_emb = sum(embs)
-        return pos_emb[:, :t].to(x)
-
-# a mock parameter list object until below issue is resolved
-# https://github.com/pytorch/pytorch/issues/36035
-class ParameterList(object):
-    def __init__(self, kls, prefix, length):
-        self.ind = 0
-        self.kls = kls
-        self.prefix = prefix
-        self.length = length
-
-    def _keyname(self, prefix, ind):
-        return f'{prefix}_{ind}'
-
-    def append(self, x):
-        setattr(self.kls, self._keyname(self.prefix, self.ind), x)
-        self.ind += 1
-
-    def to_list(self):
-        return [getattr(self.kls, self._keyname(self.prefix, i)) for i in range(self.length)]
 
 # local attention
 
@@ -826,7 +776,7 @@ class SinkhornTransformerLM(nn.Module):
 
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
-        self.axial_pos_emb = AxialPositionalEncoding(emb_dim, max_seq_len, axial_shape = (max_seq_len // bucket_size, bucket_size))
+        self.axial_pos_emb = AxialPositionalEmbedding(emb_dim, max_seq_len, axial_shape = (max_seq_len // bucket_size, bucket_size))
         self.sinkhorn_transformer = SinkhornTransformer(dim, depth, max_seq_len = max_seq_len, causal = causal, heads = heads, bucket_size = bucket_size, kv_bucket_size = kv_bucket_size, context_bucket_size = context_bucket_size, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, layer_dropout = layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, use_simple_sort_net = use_simple_sort_net, receives_context = receives_context, context_n_sortcut = context_n_sortcut, n_local_attn_heads = n_local_attn_heads, use_rezero = use_rezero, n_top_buckets = n_top_buckets,  pkm_layers = pkm_layers, pkm_num_keys = pkm_num_keys)
 
         if emb_dim != dim:
