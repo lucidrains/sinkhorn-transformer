@@ -775,7 +775,6 @@ class SinkhornTransformerLM(nn.Module):
         self.max_seq_len = max_seq_len
 
         self.to_token_emb = nn.Embedding(num_tokens, emb_dim)
-        self.pos_emb = nn.Embedding(max_seq_len, emb_dim)
         self.axial_pos_emb = AxialPositionalEmbedding(emb_dim, axial_shape = (max_seq_len // bucket_size, bucket_size))
         self.sinkhorn_transformer = SinkhornTransformer(dim, depth, max_seq_len = max_seq_len, causal = causal, heads = heads, bucket_size = bucket_size, kv_bucket_size = kv_bucket_size, context_bucket_size = context_bucket_size, non_permutative = non_permutative, sinkhorn_iter = sinkhorn_iter, n_sortcut = n_sortcut, temperature = temperature, reversible = reversible, ff_chunks = ff_chunks, ff_dropout = ff_dropout, attn_dropout = attn_dropout, attn_layer_dropout = attn_layer_dropout, layer_dropout = layer_dropout, weight_tie = weight_tie, ff_glu = ff_glu, use_simple_sort_net = use_simple_sort_net, receives_context = receives_context, context_n_sortcut = context_n_sortcut, n_local_attn_heads = n_local_attn_heads, use_rezero = use_rezero, n_top_buckets = n_top_buckets,  pkm_layers = pkm_layers, pkm_num_keys = pkm_num_keys)
 
@@ -789,7 +788,6 @@ class SinkhornTransformerLM(nn.Module):
         assert t <= self.max_seq_len, f'sequence length {t} is greater than maximum sequence length {self.max_seq_len}'
 
         x = self.to_token_emb(x)
-        x = self.pos_emb(torch.arange(t, device=device)) + x
         x = self.axial_pos_emb(x) + x
         x = self.sinkhorn_transformer(x, **kwargs)
         return self.to_logits(x)
