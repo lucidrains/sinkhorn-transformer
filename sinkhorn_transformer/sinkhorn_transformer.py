@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from inspect import isfunction
 from functools import partial, wraps, reduce
 
+from local_attention import LocalAttention
 from axial_positional_embedding import AxialPositionalEmbedding
 from product_key_memory import PKM
 from sinkhorn_transformer.reversible import ReversibleSequence, SequentialSequence
@@ -147,13 +148,6 @@ def differentiable_topk(x, k, temperature=1.):
     topks = torch.cat(topk_tensors, dim=-1)
     return topks.reshape(*_, k * n, dim)
 
-def look_around(x, backward = 1, forward = 0, pad_value = -1, dim=2):
-    t = x.shape[1]
-    dims = (len(x.shape) - dim) * (0, 0)
-    padded_x = F.pad(x, (*dims, backward, forward), value= pad_value)
-    tensors = [padded_x[:, ind:(ind + t), ...] for ind in range(forward + backward + 1)]
-    return torch.cat(tensors, dim=dim)
-
 # helper classes
 
 class Chunk(nn.Module):
@@ -227,69 +221,6 @@ class ProjectInOut(nn.Module):
         x = self.fn(x, **kwargs)
         x = self.project_out(x)
         return x
-
-# local attention
-
-class LocalAttention(nn.Module):
-    def __init__(self, bucket_size, causal = False, look_backward = 1, look_forward = 0, dropout = 0.):
-        super().__init__()
-        assert not (causal and look_forward > 0), 'you cannot look forward if causal'
-        self.bucket_size = bucket_size
-        self.causal = causal
-        self.look_backward = look_backward
-        self.look_forward = look_forward
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, q, k, v, q_mask = None, kv_mask = None):
-        bucket_size, causal, look_backward, look_forward = self.bucket_size, self.causal, self.look_backward, self.look_forward
-        b, h, t, e, device, dtype = *q.shape, q.device, q.dtype
-        buckets = t // bucket_size
-
-        ticker = torch.arange(t, device=device, dtype=dtype)[None, :]
-        b_t = bucket(buckets, ticker)
-
-        merge_batch_and_heads = partial(merge_dims, 0, 1)
-        q, k, v = map(merge_batch_and_heads, (q, k, v))
-
-        bucket_fn = partial(bucket, buckets)
-        bq, bk, bv = map(bucket_fn, (q, k, v))
-
-        look_around_kwargs = {'backward': look_backward, 'forward': look_forward}
-        bk = look_around(bk, **look_around_kwargs)
-        bv = look_around(bv, **look_around_kwargs)
-
-        bq_t = b_t
-        bq_k = look_around(b_t, **look_around_kwargs)
-
-        dots = torch.einsum('bhie,bhje->bhij', bq, bk) * (e ** -0.5)
-        mask_value = max_neg_value(dots)
-
-        if causal:
-            mask = bq_t[:, :, :, None] < bq_k[:, :, None, :]
-            dots.masked_fill_(mask, mask_value)
-            del mask
-
-        mask = bq_k[:, :, None, :] == -1
-        dots.masked_fill_(mask, mask_value)
-        del mask
-
-        if not all_none(q_mask, kv_mask):
-            q_mask = default(q_mask, lambda: torch.ones((b, t), device=device).bool())
-            kv_mask = default(kv_mask, q_mask)
-            mq, mk = map(bucket_fn, (q_mask, kv_mask))
-
-            mk = look_around(mk, pad_value = False, **look_around_kwargs)
-            mask = (mq[:, None, :, :, None] * mk[:, None, :, None, :])
-            mask = merge_batch_and_heads(mask.expand(-1, h, -1, -1, -1))
-            dots.masked_fill_(~mask, mask_value)
-            del mask
-
-        attn = dots.softmax(dim=-1)
-        attn = self.dropout(attn)
-
-        out = torch.einsum('bhij,bhje->bhie', attn, bv)
-        out = out.reshape(b, h, t, e)
-        return out
 
 # non-causal sortnet and sinkhorn attention
 
@@ -692,7 +623,7 @@ class SinkhornSelfAttention(nn.Module):
         out = []
 
         if has_local > 0:
-            out.append(self.local_attention(lq, lk, lv, q_mask = input_mask, kv_mask = kv_mask))
+            out.append(self.local_attention(lq, lk, lv, input_mask = input_mask))
 
         if has_sinkhorn > 0:
             out.append(self.sinkhorn_attention(q, k, v, q_mask = input_mask, kv_mask = kv_mask))
