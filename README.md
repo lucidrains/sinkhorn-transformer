@@ -48,6 +48,7 @@ model = SinkhornTransformerLM(
     layer_dropout = 0.1,      # add layer dropout, from 'Reducing Transformer Depth on Demand' paper
     weight_tie = True,        # tie layer parameters, from Albert paper
     emb_dim = 128,            # embedding factorization, from Albert paper
+    dim_head = 64,            # be able to fix the dimension of each head, making it independent of the embedding dimension and the number of heads
     ff_glu = True,            # use GLU in feedforward, from paper 'GLU Variants Improve Transformer'
     n_local_attn_heads = 2,   # replace N heads with local attention, suggested to work well from Routing Transformer paper
     pkm_layers = (4,7),       # specify layers to use product key memory. paper shows 1 or 2 modules near the middle of the transformer is best
@@ -283,6 +284,15 @@ If anyone has found a cleaner solution, please let me know in the issues.
     year    = {2019},
     eprint  = {1907.05242},
     archivePrefix = {arXiv}
+}
+```
+
+```bibtex
+@misc{bhojanapalli2020lowrank,
+    title   = {Low-Rank Bottleneck in Multi-head Attention Models},
+    author  = {Srinadh Bhojanapalli and Chulhee Yun and Ankit Singh Rawat and Sashank J. Reddi and Sanjiv Kumar},
+    year    = {2020},
+    eprint  = {2002.07028}
 }
 ```
 
