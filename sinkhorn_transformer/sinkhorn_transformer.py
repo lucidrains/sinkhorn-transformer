@@ -570,7 +570,7 @@ class SinkhornCausalAttention(nn.Module):
 class SinkhornSelfAttention(nn.Module):
     def __init__(self, dim, bucket_size, max_seq_len, heads = 8, dim_head = None, kv_bucket_size = None, causal = False, non_permutative = True, sinkhorn_iter = 5, n_sortcut = 0, temperature = 0.75, attn_dropout = 0., dropout = 0., context_only = False, use_simple_sort_net = False, n_local_attn_heads = 0, n_top_buckets = 1):
         super().__init__()
-        assert divisible_by(dim, heads), f'dimension {dim} must be divisible by the number of heads {heads}'
+        assert dim_head or divisible_by(dim, heads), f'If dim_head is None, dimension {dim} must be divisible by the number of heads {heads}'
         assert not (causal and n_sortcut > 0), 'sortcut can only be used for non causal attention'
         assert not (causal and context_only), 'context only self attention layer cannot be causal'
         assert n_local_attn_heads <= heads, 'number of local attention heads cannot exceed total heads'
