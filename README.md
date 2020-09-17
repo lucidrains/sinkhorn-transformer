@@ -42,6 +42,7 @@ model = SinkhornTransformerLM(
     n_top_buckets = 2,        # sort specified number of key/value buckets to one query bucket. paper is at 1, defaults to 2
     ff_chunks = 10,           # feedforward chunking, from Reformer paper
     reversible = True,        # make network reversible, from Reformer paper
+    emb_dropout = 0.1,        # embedding dropout
     ff_dropout = 0.1,         # feedforward dropout
     attn_dropout = 0.1,       # post attention dropout
     attn_layer_dropout = 0.1, # post attention layer dropout
