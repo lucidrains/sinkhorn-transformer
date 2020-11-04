@@ -718,7 +718,7 @@ class SinkhornTransformerLM(nn.Module):
         if emb_dim != dim:
             self.sinkhorn_transformer = ProjectInOut(self.sinkhorn_transformer, emb_dim, dim, project_out =(not return_embeddings))
 
-        self.norm = nn.LayerNorm(dim)
+        self.norm = nn.LayerNorm(emb_dim)
         self.to_logits = identity if return_embeddings else nn.Linear(emb_dim, num_tokens)
 
     def forward(self, x, **kwargs):
