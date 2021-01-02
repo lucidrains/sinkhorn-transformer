@@ -2,7 +2,7 @@ import math
 import torch
 from torch import nn
 from operator import mul
-from fractions import gcd
+from math import gcd
 import torch.nn.functional as F
 from inspect import isfunction
 from functools import partial, wraps, reduce
@@ -28,7 +28,7 @@ def divisible_by(num, divisor):
     return num % divisor == 0
 
 def lcm(*numbers):
-    return int(reduce(lambda x, y: (x * y) / gcd(x, y), numbers, 1))
+    return int(reduce(lambda x, y: int((x * y) / gcd(x, y)), numbers, 1))
 
 def all_none(*arr):
     return all(el is None for el in arr)
