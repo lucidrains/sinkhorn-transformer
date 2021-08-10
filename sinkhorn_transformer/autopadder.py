@@ -44,7 +44,7 @@ class Autopadder(nn.Module):
         context_mask = kwargs.get('context_mask')
 
         if input_mask is None:
-            input_mask = torch.full_like(x, True, device=x.device, dtype=torch.bool)
+            input_mask = torch.full(x.shape[:2], True, device=x.device, dtype=torch.bool)
 
         if context is not None and context_mask is None:
             context_mask = torch.full(context.shape[0:2], True, device=x.device, dtype=torch.bool)
